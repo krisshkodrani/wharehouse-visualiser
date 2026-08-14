@@ -1,0 +1,5 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,
+  "required":["headerId","timestamp","version","manufacturer","serialNumber","mobileRobotPosition","velocity"],
+  "properties":{"headerId":{"type":"integer"},"timestamp":{"type":"string","format":"date-time"},"version":{"const":"3.0.0"},"manufacturer":{"type":"string"},"serialNumber":{"type":"string"},"mobileRobotPosition":{"type":"object","required":["x","y","theta","mapId","localized"],"properties":{"x":{"type":"number"},"y":{"type":"number"},"theta":{"type":"number"},"mapId":{"type":"string"},"localized":{"type":"boolean"}}},"velocity":{"type":"number"}}
+}

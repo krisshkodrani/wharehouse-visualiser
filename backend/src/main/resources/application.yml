@@ -1,0 +1,29 @@
+server:
+  port: ${SERVER_PORT:8088}
+spring:
+  application:
+    name: warehouse-backend
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/warehouse}
+    username: ${DATABASE_USER:warehouse}
+    password: ${DATABASE_PASSWORD:warehouse}
+  flyway:
+    locations: classpath:db/migration
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+warehouse:
+  mqtt-url: ${MQTT_URL:tcp://localhost:1883}
+  mqtt-user: ${MQTT_USER:warehouse}
+  mqtt-password: ${MQTT_PASSWORD:warehouse}
+  ai-provider: ${AI_PROVIDER:mock}
+  openrouter-api-key: ${OPENROUTER_API_KEY:}
+  openrouter-model: ${OPENROUTER_MODEL:openai/gpt-4o-mini}
+  openrouter-provider: ${OPENROUTER_PROVIDER:}
+  openrouter-timeout-seconds: ${OPENROUTER_TIMEOUT_SECONDS:20}

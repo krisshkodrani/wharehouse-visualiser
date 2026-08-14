@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warehouse Visualizer</title>
+    <script src="diagnostics.js"></script>
+    <script src="vendor/babylon.js"></script>
+    <script
+      id="sap-ui-bootstrap"
+      src="resources/sap-ui-core.js"
+      data-sap-ui-theme="sap_horizon"
+      data-sap-ui-async="true"
+      data-sap-ui-compat-version="edge"
+      data-sap-ui-on-init="module:sap/ui/core/ComponentSupport"
+      data-sap-ui-resource-roots='{"warehouse.visualizer":"./"}'
+    ></script>
+  </head>
+  <body class="sapUiBody sapUiSizeCompact" id="content">
+    <div id="startup-status" role="status" aria-live="polite">
+      <div class="startupCard">
+        <div class="startupMark" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="startupEyebrow">OPERATIONS CONTROL</div>
+        <div class="startupTitle">Warehouse Visualizer</div>
+        <div class="startupStage" id="startup-stage">Preparing application…</div>
+        <div class="startupProgress" aria-hidden="true"><span></span></div>
+        <div class="startupSteps" aria-hidden="true">
+          <i class="active"></i><i></i><i></i><i></i>
+        </div>
+      </div>
+    </div>
+    <div data-sap-ui-component data-name="warehouse.visualizer" data-id="container" data-settings='{"id":"warehouseVisualizer"}'></div>
+  </body>
+</html>

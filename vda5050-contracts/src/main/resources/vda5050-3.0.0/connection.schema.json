@@ -1,0 +1,5 @@
+{
+  "$schema":"http://json-schema.org/draft-07/schema#","type":"object","additionalProperties":false,
+  "required":["headerId","timestamp","version","manufacturer","serialNumber","connectionState"],
+  "properties":{"headerId":{"type":"integer"},"timestamp":{"type":"string","format":"date-time"},"version":{"const":"3.0.0"},"manufacturer":{"type":"string"},"serialNumber":{"type":"string"},"connectionState":{"enum":["ONLINE","OFFLINE","CONNECTIONBROKEN"]}}
+}

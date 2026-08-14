@@ -1,0 +1,16 @@
+FROM maven:3.9.11-eclipse-temurin-21 AS build
+WORKDIR /workspace
+COPY pom.xml ./
+COPY vda5050-contracts/pom.xml vda5050-contracts/pom.xml
+COPY backend/pom.xml backend/pom.xml
+COPY simulator/pom.xml simulator/pom.xml
+COPY vda5050-contracts/src vda5050-contracts/src
+COPY backend/src backend/src
+RUN mvn -B -pl backend -am package -DskipTests
+RUN cp "$(find /workspace/backend/target -maxdepth 1 -name 'warehouse-backend-*.jar' ! -name '*.original' -print -quit)" /workspace/backend/target/app.jar
+
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+COPY --from=build /workspace/backend/target/app.jar app.jar
+EXPOSE 8080
+ENTRYPOINT ["java","-jar","app.jar"]

@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: warehouse-agv-simulator
+  main:
+    web-application-type: none
+warehouse:
+  mqtt-url: ${MQTT_URL:tcp://localhost:1883}
+  mqtt-user: ${MQTT_USER:warehouse}
+  mqtt-password: ${MQTT_PASSWORD:warehouse}
+  speed: ${AGV_SPEED:4.0}

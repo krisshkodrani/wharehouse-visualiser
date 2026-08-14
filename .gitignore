@@ -1,0 +1,17 @@
+webapp/vendor/babylon.js
+.DS_Store
+node_modules/
+dist/
+**/target/
+coverage/
+.env
+.env.*
+!.env.example
+.mvn/apache-maven-*/
+
+.ui5-tooling-modules/
+debug.log
+ui5-server*.log
+ui5-e2e*.log
+test-results/
+playwright-report/
