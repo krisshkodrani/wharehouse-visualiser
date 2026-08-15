@@ -59,6 +59,10 @@ const FLOOR_HALF_WIDTH = 24;
 const FLOOR_HALF_DEPTH = 18;
 const FORKLIFT_RADIUS = 0.72;
 const MAX_FORK_HEIGHT = 2.75;
+const OUTBOUND_CONVEYOR_START = -2.2;
+const OUTBOUND_CONVEYOR_END = 8.2;
+const OUTBOUND_CONVEYOR_LENGTH = OUTBOUND_CONVEYOR_END - OUTBOUND_CONVEYOR_START;
+const OUTBOUND_CONVEYOR_CENTER = (OUTBOUND_CONVEYOR_START + OUTBOUND_CONVEYOR_END) / 2;
 
 export default class WarehouseScene {
   private readonly engine: EngineType;
@@ -1002,33 +1006,87 @@ export default class WarehouseScene {
     const safety = this.createMaterial("conveyorSafety", "#e87518");
     const cardboard = this.createCardboardMaterial("outboundCardboard");
     this.conveyorCardboardMaterial = cardboard;
-    const deck = MeshBuilder.CreateBox("outboundConveyor", { width: 3.7, height: 0.18, depth: 1.15 }, this.scene);
-    const center = this.stationPoint(station, 0, 0);
+    const deck = MeshBuilder.CreateBox("outboundConveyor", { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.18, depth: 1.15 }, this.scene);
+    const center = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, 0);
     deck.position.set(center.x, 0.72, center.z); deck.rotation.y = station.rotationY; deck.material = belt; deck.parent = this.warehouseRoot ?? null;
-    for (const x of [-1.85, 1.85]) {
-      const rail = MeshBuilder.CreateBox("conveyorRail", { width: 0.1, height: 0.3, depth: 1.35 }, this.scene);
-      const point = this.stationPoint(station, x, 0);
+    for (const z of [-0.68, 0.68]) {
+      const rail = MeshBuilder.CreateBox("conveyorRail", { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.3, depth: 0.1 }, this.scene);
+      const point = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, z);
       rail.position.set(point.x, 0.88, point.z); rail.rotation.y = station.rotationY; rail.material = safety; rail.parent = this.warehouseRoot ?? null;
     }
-    for (let index = 0; index < 9; index += 1) {
+    const rollerSpacing = 0.42;
+    const rollerCount = Math.floor(OUTBOUND_CONVEYOR_LENGTH / rollerSpacing);
+    for (let index = 0; index <= rollerCount; index += 1) {
       const roller = MeshBuilder.CreateCylinder(`conveyorRoller-${index}`, { diameter: 0.18, height: 1.02, tessellation: 18 }, this.scene);
-      const point = this.stationPoint(station, -1.65 + index * 0.41, 0);
+      const point = this.stationPoint(station, OUTBOUND_CONVEYOR_START + index * rollerSpacing, 0);
       roller.rotation.x = Math.PI / 2; roller.rotation.y = station.rotationY; roller.position.set(point.x, 0.84, point.z);
       roller.material = frame; roller.parent = this.warehouseRoot ?? null;
     }
-    for (const x of [-1.6, 1.6]) for (const z of [-0.42, 0.42]) {
+    for (const x of [-1.8, 0.8, 3.4, 6, 8]) for (const z of [-0.42, 0.42]) {
       const leg = MeshBuilder.CreateBox("conveyorLeg", { width: 0.12, height: 0.7, depth: 0.12 }, this.scene);
       const point = this.stationPoint(station, x, z);
       leg.position.set(point.x, 0.35, point.z); leg.material = frame; leg.parent = this.warehouseRoot ?? null;
     }
-    this.createDockEquipment(station, "SHIPPING");
+    this.createOutboundDischargePortal(station, frame, safety);
     for (let index = 0; index < Math.min(count, 4); index += 1) this.addConveyorCargo(index, false);
+  }
+
+  private createOutboundDischargePortal(
+    station: StationDefinition,
+    frame: StandardMaterialType,
+    safety: StandardMaterialType
+  ): void {
+    const darkConcrete = this.createMaterial("outboundApron", "#777e7c");
+    const apron = MeshBuilder.CreateGround("outboundApron", { width: 5.2, height: 4.2 }, this.scene);
+    const apronPoint = this.stationPoint(station, 8.8, 0);
+    apron.position.set(apronPoint.x, 0.006, apronPoint.z);
+    apron.rotation.y = station.rotationY;
+    apron.material = darkConcrete;
+    apron.parent = this.warehouseRoot ?? null;
+
+    // The portal is centred on the west wall and visibly frames the indoor/outdoor hand-off.
+    const portalX = 6.45;
+    for (const z of [-0.92, 0.92]) {
+      const point = this.stationPoint(station, portalX, z);
+      const upright = MeshBuilder.CreateBox("outboundPortalUpright", { width: 0.2, height: 2.8, depth: 0.2 }, this.scene);
+      upright.position.set(point.x, 1.4, point.z); upright.rotation.y = station.rotationY;
+      upright.material = frame; upright.parent = this.warehouseRoot ?? null;
+
+      const curtain = MeshBuilder.CreateBox("outboundSafetyCurtain", { width: 0.08, height: 1.8, depth: 0.08 }, this.scene);
+      curtain.position.set(point.x, 1.35, point.z); curtain.rotation.y = station.rotationY;
+      curtain.material = safety; curtain.parent = this.warehouseRoot ?? null;
+    }
+    const headerPoint = this.stationPoint(station, portalX, 0);
+    const header = MeshBuilder.CreateBox("outboundPortalHeader", { width: 0.2, height: 0.22, depth: 2.05 }, this.scene);
+    header.position.set(headerPoint.x, 2.7, headerPoint.z); header.rotation.y = station.rotationY;
+    header.material = frame; header.parent = this.warehouseRoot ?? null;
+
+    for (const z of [-1.18, 1.18]) {
+      const point = this.stationPoint(station, 5.75, z);
+      const bollard = MeshBuilder.CreateCylinder("outboundBollard", { diameter: 0.24, height: 0.95, tessellation: 16 }, this.scene);
+      bollard.position.set(point.x, 0.475, point.z); bollard.material = safety; bollard.parent = this.warehouseRoot ?? null;
+    }
+
+    const texture = new DynamicTexture("outboundDirectionTexture", { width: 512, height: 128 }, this.scene, true);
+    texture.hasAlpha = true;
+    texture.drawText("OUTBOUND  →", null, 88, "bold 48px Arial", "#f4f4ee", "transparent", true, true);
+    const directionMaterial = new StandardMaterial("outboundDirectionMaterial", this.scene);
+    directionMaterial.diffuseTexture = texture;
+    directionMaterial.emissiveColor = new Color3(0.2, 0.2, 0.2);
+    directionMaterial.useAlphaFromDiffuseTexture = true;
+    const direction = MeshBuilder.CreatePlane("outboundDirection", { width: 3.8, height: 0.9 }, this.scene);
+    const directionPoint = this.stationPoint(station, 1.2, 1.45);
+    direction.position.set(directionPoint.x, 0.026, directionPoint.z);
+    direction.rotation.x = Math.PI / 2;
+    direction.rotation.y = station.rotationY + Math.PI;
+    direction.material = directionMaterial;
+    direction.parent = this.warehouseRoot ?? null;
   }
 
   private addConveyorCargo(index: number, animateEntry: boolean): void {
     if (!this.conveyorCardboardMaterial || !this.outboundStation) return;
     const root = new TransformNode(`shippingCargo-${index}`, this.scene);
-    const start = this.stationPoint(this.outboundStation, -1.65 - index * 0.15, 0);
+    const start = this.stationPoint(this.outboundStation, -1.75 - index * 0.15, 0);
     root.position.set(start.x, 1.2, start.z);
     root.rotation.y = this.outboundStation.rotationY;
     root.parent = this.warehouseRoot ?? null;
@@ -1038,7 +1096,7 @@ export default class WarehouseScene {
     const item = { id: `conveyor-${index}`, root, carried: false, meshes: [box] };
     this.conveyorCargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
-    const end = this.stationPoint(this.outboundStation, 1.45 - index * 0.3, 0);
+    const end = this.stationPoint(this.outboundStation, 5.6 - index * 0.55, 0);
     const travel = new Animation(`conveyorTravel-${index}`, "position", 30, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
     travel.setKeys([{ frame: 0, value: root.position.clone() }, { frame: 180, value: new Vector3(end.x, 1.2, end.z) }]);
     this.scene.beginDirectAnimation(root, [travel], 0, 180, false);
@@ -1052,7 +1110,7 @@ export default class WarehouseScene {
       const item = this.conveyorCargoItems.pop();
       if (!item) continue;
       const exit = new Animation("conveyorCargoExit", "position", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
-      const end = this.outboundStation ? this.stationPoint(this.outboundStation, 3.2, 0) : { x: item.root.position.x, z: item.root.position.z };
+      const end = this.outboundStation ? this.stationPoint(this.outboundStation, 9.6, 0) : { x: item.root.position.x, z: item.root.position.z };
       exit.setKeys([{ frame: 0, value: item.root.position.clone() }, { frame: 30, value: new Vector3(end.x, item.root.position.y, end.z) }]);
       const scale = new Animation("conveyorCargoExitScale", "scaling", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
       scale.setKeys([{ frame: 0, value: item.root.scaling.clone() }, { frame: 30, value: new Vector3(0.4, 0.4, 0.4) }]);
@@ -1182,6 +1240,24 @@ export default class WarehouseScene {
       addMark(`receiving-crosswalk-${i}`, inPoint.x, inPoint.z, 0.25, 1.2, white);
       const outPoint = this.stationPoint(outbound, -1.5 + i * 0.5, 1.75);
       addMark(`shipping-crosswalk-${i}`, outPoint.x, outPoint.z, 0.25, 1.2, white);
+    }
+
+    // Longitudinal exclusion lines reinforce the westbound conveyor flow while leaving the AGV loading end open.
+    for (const localZ of [-1.12, 1.12]) {
+      const point = this.stationPoint(outbound, 2.15, localZ);
+      const mark = MeshBuilder.CreateBox("shipping-conveyor-clearance", { width: 8.7, height: 0.018, depth: 0.08 }, this.scene);
+      mark.position.set(point.x, 0.014, point.z);
+      mark.rotation.y = outbound.rotationY;
+      mark.material = yellow;
+      mark.parent = this.warehouseRoot ?? null;
+    }
+    for (let index = 0; index < 9; index += 1) {
+      const point = this.stationPoint(outbound, -1.45 + index * 0.95, -1.12);
+      const hatch = MeshBuilder.CreateBox(`shipping-clearance-hatch-${index}`, { width: 0.08, height: 0.019, depth: 0.46 }, this.scene);
+      hatch.position.set(point.x, 0.015, point.z);
+      hatch.rotation.y = outbound.rotationY + 0.62;
+      hatch.material = yellow;
+      hatch.parent = this.warehouseRoot ?? null;
     }
   }
 
