@@ -291,7 +291,7 @@ export default class MainController extends Controller {
           const slotById = new Map(slots.map((slot) => [slot.id, slot]));
           const loads = snapshot.loads.filter((load) => ["STORED", "OUTBOUND_QUEUED"].includes(load.status) && slotById.has(load.locationId)).map((load) => {
             const slot = slotById.get(load.locationId)!;
-            return { id: load.id, item: load.item, bay: slot.bayIndex ?? 0, level: slot.levelIndex ?? 0 };
+            return { id: load.id, item: load.item, status: load.status, locationId: load.locationId, bay: slot.bayIndex ?? 0, level: slot.levelIndex ?? 0 };
           });
           return {
             id: rack.id, name: rack.name, position: [rack.x, 0, rack.z] as [number, number, number], rotationY: rack.rotationY, bays: rack.bays,
@@ -318,8 +318,11 @@ export default class MainController extends Controller {
           width: obstacle.width, depth: obstacle.depth, height: obstacle.height
         })),
         inboundCount: inbound.length,
-        inboundLoads: inbound.map((load) => ({ id: load.id, item: load.item })),
+        inboundLoads: inbound.map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
         conveyorCount: snapshot.loads.filter((load) => load.status === "ON_CONVEYOR").length,
+        conveyorLoads: snapshot.loads.filter((load) => load.status === "ON_CONVEYOR")
+          .map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
+        loadDetails: snapshot.loads.map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
         carriedLoadId: agv?.carriedLoadId,
         chargingStationId: agv?.charging ? agv.currentStationId : undefined
       };
@@ -328,6 +331,8 @@ export default class MainController extends Controller {
       inboundCount: undefined,
       inboundLoads: undefined,
       conveyorCount: undefined,
+      conveyorLoads: undefined,
+      loadDetails: undefined,
       carriedLoadId: undefined,
       chargingStationId: undefined,
       racks: visual.racks.map(({ emptySlots: _emptySlots, ...rack }) => rack)

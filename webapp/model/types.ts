@@ -13,7 +13,7 @@ export interface RackDefinition {
   loads?: RackLoadDefinition[];
 }
 
-export interface RackLoadDefinition { id: string; item: string; bay: number; level: number; }
+export interface RackLoadDefinition { id: string; item: string; status?: string; locationId?: string; bay: number; level: number; }
 
 export interface StationDefinition {
   id: string;
@@ -24,7 +24,7 @@ export interface StationDefinition {
   depth: number;
 }
 
-export interface LoadVisualDefinition { id: string; item: string; }
+export interface LoadVisualDefinition { id: string; item: string; status?: string; locationId?: string; }
 
 export interface ObstacleDefinition {
   id: string;
@@ -48,6 +48,8 @@ export interface WarehouseVisualConfig {
   inboundCount?: number;
   inboundLoads?: LoadVisualDefinition[];
   conveyorCount?: number;
+  conveyorLoads?: LoadVisualDefinition[];
+  loadDetails?: LoadVisualDefinition[];
   carriedLoadId?: string;
   chargingStationId?: string;
 }

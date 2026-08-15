@@ -100,7 +100,8 @@ export default class WarehouseScene {
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly onRackSelected: (rackId: string, rackName: string) => void
+    private readonly onRackSelected: (rackId: string, rackName: string) => void,
+    private readonly onLoadHover: (loadId?: string) => void
   ) {
     this.engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
     this.scene = new Scene(this.engine);
@@ -154,7 +155,7 @@ export default class WarehouseScene {
     this.createParkingAreas(config.stations?.filter((station) => station.type === "PARKING_CHARGING") ?? []);
     this.createSign(config.signText, config.accentColor);
     this.createInboundStaging(inboundStation, config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
-    this.createOutboundConveyor(outboundStation, config.conveyorCount ?? 0);
+    this.createOutboundConveyor(outboundStation, config.conveyorLoads ?? []);
     this.forkliftStops = [Vector3.FromArray(config.forkliftStops[0]), Vector3.FromArray(config.forkliftStops[1])];
     this.nextForkliftStop = 1;
     this.createForklift(previousForkliftPosition ?? this.forkliftStops[0], config.accentColor);
@@ -175,7 +176,7 @@ export default class WarehouseScene {
     this.syncCarriedCargo(config.carriedLoadId);
     this.syncRackCargo(config.racks);
     this.syncInboundCargo(config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
-    this.syncConveyorCargo(config.conveyorCount ?? 0);
+    this.syncConveyorCargo(config.conveyorLoads ?? []);
     this.updateChargingIndicators(config.chargingStationId);
   }
 
@@ -334,10 +335,12 @@ export default class WarehouseScene {
       }
     }
     for (const part of parts) {
-      part.metadata = { rackId: rack.id };
+      part.metadata = { ...(part.metadata as object | undefined), rackId: rack.id };
       part.isPickable = true;
       part.actionManager = new ActionManager(this.scene);
       part.actionManager.registerAction(new ExecuteCodeAction(ActionManager.OnPickTrigger, () => this.selectRack(rack.id, rack.name)));
+      const loadId = (part.metadata as { loadId?: string }).loadId;
+      if (loadId) this.registerLoadHover(part, loadId);
     }
     this.rackParts.set(rack.id, {
       meshes: parts,
@@ -392,8 +395,10 @@ export default class WarehouseScene {
     crate.position.y = 0.34;
     crate.material = crateMaterial;
     crate.parent = cargoRoot;
+    const cargoId = loadId ?? `${rack.id}-${bay + 1}-${level + 1}`;
+    for (const mesh of [...palletParts, crate]) mesh.metadata = { loadId: cargoId };
     rackParts.push(...palletParts, crate);
-    const item = { id: loadId ?? `${rack.id}-${bay + 1}-${level + 1}`, root: cargoRoot, carried: false, meshes: [...palletParts, crate] };
+    const item = { id: cargoId, root: cargoRoot, carried: false, meshes: [...palletParts, crate] };
     this.cargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
     return item;
@@ -726,6 +731,7 @@ export default class WarehouseScene {
     }
     const box = MeshBuilder.CreateBox("liveCarriedBox", { width: 0.72, height: 0.56, depth: 0.56 }, this.scene);
     box.position.y = 0.34; box.material = cardboardMaterial; box.parent = root;
+    this.registerLoadHover(box, loadId);
     const item = { id: loadId, root, carried: true };
     this.carriedCargo = item;
     this.telemetry("CARGO_ATTACHED", {
@@ -978,6 +984,7 @@ export default class WarehouseScene {
     const label = MeshBuilder.CreateBox(`inboundLabel-${load.id}`, { width: 0.32, height: 0.012, depth: 0.22 }, this.scene);
     label.position.set(0, 0.715, 0); label.material = this.createMaterial(`inboundLabelMaterial-${load.id}`, "#f3f0dc"); label.parent = root;
     const item = { id: load.id, root, carried: false, meshes: [base, box, label] };
+    for (const mesh of item.meshes) this.registerLoadHover(mesh, load.id);
     this.inboundCargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
   }
@@ -1004,7 +1011,7 @@ export default class WarehouseScene {
     if (JSON.stringify(previousIds) !== JSON.stringify(currentIds)) this.telemetry("INBOUND_LOADS_SYNCED", { previousIds, currentIds });
   }
 
-  private createOutboundConveyor(station: StationDefinition, count: number): void {
+  private createOutboundConveyor(station: StationDefinition, loads: LoadVisualDefinition[]): void {
     this.outboundStation = station;
     const frame = this.createMetalMaterial("conveyorFrame", "#59636c", 72);
     const belt = this.createMaterial("conveyorBelt", "#20262b");
@@ -1033,7 +1040,7 @@ export default class WarehouseScene {
       leg.position.set(point.x, 0.35, point.z); leg.material = frame; leg.parent = this.warehouseRoot ?? null;
     }
     this.createOutboundDischargePortal(station, frame, safety);
-    for (let index = 0; index < Math.min(count, 4); index += 1) this.addConveyorCargo(index, false);
+    loads.slice(0, 4).forEach((load, index) => this.addConveyorCargo(load, index, false));
   }
 
   private createOutboundDischargePortal(
@@ -1088,7 +1095,7 @@ export default class WarehouseScene {
     direction.parent = this.warehouseRoot ?? null;
   }
 
-  private addConveyorCargo(index: number, animateEntry: boolean): void {
+  private addConveyorCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean): void {
     if (!this.conveyorCardboardMaterial || !this.outboundStation) return;
     const root = new TransformNode(`shippingCargo-${index}`, this.scene);
     const start = this.stationPoint(this.outboundStation, -1.75 - index * 0.15, 0);
@@ -1098,7 +1105,8 @@ export default class WarehouseScene {
     const box = MeshBuilder.CreateBox(`shippingBox-${index}`, { width: 0.62, height: 0.56, depth: 0.62 }, this.scene);
     box.material = this.conveyorCardboardMaterial;
     box.parent = root;
-    const item = { id: `conveyor-${index}`, root, carried: false, meshes: [box] };
+    const item = { id: load.id, root, carried: false, meshes: [box] };
+    this.registerLoadHover(box, load.id);
     this.conveyorCargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
     const end = this.stationPoint(this.outboundStation, 5.6 - index * 0.55, 0);
@@ -1107,13 +1115,13 @@ export default class WarehouseScene {
     this.scene.beginDirectAnimation(root, [travel], 0, 180, false);
   }
 
-  private syncConveyorCargo(count: number): void {
-    const target = Math.min(count, 4);
-    if (target !== this.conveyorCargoItems.length) this.telemetry("CONVEYOR_COUNT_CHANGED", { from: this.conveyorCargoItems.length, to: target });
-    while (this.conveyorCargoItems.length < target) this.addConveyorCargo(this.conveyorCargoItems.length, true);
-    while (this.conveyorCargoItems.length > target) {
-      const item = this.conveyorCargoItems.pop();
-      if (!item) continue;
+  private syncConveyorCargo(loads: LoadVisualDefinition[]): void {
+    const desired = loads.slice(0, 4);
+    const desiredIds = new Set(desired.map((load) => load.id));
+    if (desired.length !== this.conveyorCargoItems.length) this.telemetry("CONVEYOR_COUNT_CHANGED", { from: this.conveyorCargoItems.length, to: desired.length });
+    for (const item of [...this.conveyorCargoItems]) {
+      if (desiredIds.has(item.id)) continue;
+      this.conveyorCargoItems.splice(this.conveyorCargoItems.indexOf(item), 1);
       const exit = new Animation("conveyorCargoExit", "position", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
       const end = this.outboundStation ? this.stationPoint(this.outboundStation, 9.6, 0) : { x: item.root.position.x, z: item.root.position.z };
       exit.setKeys([{ frame: 0, value: item.root.position.clone() }, { frame: 30, value: new Vector3(end.x, item.root.position.y, end.z) }]);
@@ -1121,6 +1129,9 @@ export default class WarehouseScene {
       scale.setKeys([{ frame: 0, value: item.root.scaling.clone() }, { frame: 30, value: new Vector3(0.4, 0.4, 0.4) }]);
       this.scene.beginDirectAnimation(item.root, [exit, scale], 0, 30, false, 1, () => item.root.dispose(false, true));
     }
+    desired.forEach((load, index) => {
+      if (!this.conveyorCargoItems.some((item) => item.id === load.id)) this.addConveyorCargo(load, index, true);
+    });
   }
 
   private syncRackCargo(racks: RackDefinition[]): void {
@@ -1328,6 +1339,19 @@ export default class WarehouseScene {
     return material;
   }
 
+  private registerLoadHover(mesh: Mesh, loadId: string): void {
+    mesh.isPickable = true;
+    mesh.actionManager ??= new ActionManager(this.scene);
+    mesh.actionManager.registerAction(new ExecuteCodeAction(ActionManager.OnPointerOverTrigger, () => {
+      this.canvas.style.cursor = "help";
+      this.onLoadHover(loadId);
+    }));
+    mesh.actionManager.registerAction(new ExecuteCodeAction(ActionManager.OnPointerOutTrigger, () => {
+      this.canvas.style.cursor = "";
+      this.onLoadHover();
+    }));
+  }
+
   private formatPosition(position: Vector3Type): string {
     return `[${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)}]`;
   }
@@ -1343,6 +1367,8 @@ export default class WarehouseScene {
   }
 
   private disposeWarehouse(): void {
+    this.onLoadHover();
+    this.canvas.style.cursor = "";
     if (this.forklift) {
       this.scene.stopAnimation(this.forklift);
     }
