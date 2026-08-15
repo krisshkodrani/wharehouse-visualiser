@@ -42,6 +42,45 @@ class WarehouseController {
     return ResponseEntity.accepted().body(operations.outbound(request));
   }
 
+  @GetMapping("/scenario-presets")
+  java.util.List<ApiModels.ScenarioPreset> scenarioPresets() { return operations.scenarioPresets(); }
+
+  @PostMapping("/warehouses/linz/scenario")
+  ResponseEntity<ApiModels.WarehouseSnapshot> scenario(@Valid @RequestBody ApiModels.ScenarioRequest request) {
+    return ResponseEntity.status(201).body(operations.seedScenario(request.presetId()));
+  }
+
+  @PostMapping("/warehouses/linz/scenario/reset")
+  ApiModels.WarehouseSnapshot resetScenario() { return operations.resetScenario(); }
+
+  @GetMapping("/warehouses/linz/transport-orders")
+  java.util.List<ApiModels.TransportOrderView> transportOrders() { return store.transportOrders(); }
+
+  @GetMapping("/warehouses/linz/transport-orders/{id}")
+  ResponseEntity<ApiModels.TransportOrderView> transportOrder(@PathVariable("id") UUID id) {
+    return store.transportOrder(id).map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.notFound().build());
+  }
+
+  @PostMapping("/warehouses/linz/transport-orders")
+  ResponseEntity<ApiModels.TransportOrderView> createTransportOrder(@Valid @RequestBody ApiModels.TransportOrderRequest request) {
+    String type = request.type().trim().toUpperCase(java.util.Locale.ROOT);
+    String priority = request.priority().trim().toUpperCase(java.util.Locale.ROOT);
+    if (!java.util.Set.of("PUTAWAY", "OUTBOUND").contains(type)) throw new IllegalArgumentException("Type must be PUTAWAY or OUTBOUND");
+    if (!java.util.Set.of("NORMAL", "HIGH", "URGENT").contains(priority)) throw new IllegalArgumentException("Priority must be NORMAL, HIGH, or URGENT");
+    if ("OUTBOUND".equals(type)) return ResponseEntity.status(201).body(operations.outbound(request));
+    ApiModels.PutawayAccepted accepted = planning.submit(request.loadIds(), priority, request.objective());
+    return ResponseEntity.accepted().body(store.transportOrder(accepted.requestId()).orElseThrow());
+  }
+
+  @PostMapping("/warehouses/linz/transport-orders/{id}/cancel")
+  ApiModels.TransportOrderView cancelTransportOrder(@PathVariable("id") UUID id) { return operations.cancel(id); }
+
+  @PostMapping("/demo/events")
+  ResponseEntity<Void> demoEvent(@Valid @RequestBody ApiModels.DemoEventRequest request) {
+    operations.demoEvent(request);
+    return ResponseEntity.accepted().build();
+  }
+
   @PostMapping("/warehouses/linz/operations/pause")
   ApiModels.RuntimeView pause() { return operations.pause(); }
 
@@ -51,12 +90,15 @@ class WarehouseController {
   @PostMapping("/warehouses/linz/operations/reset")
   ApiModels.RuntimeView reset() { return operations.reset(); }
 
+  @PostMapping("/warehouses/linz/operations/speed")
+  ApiModels.RuntimeView speed(@Valid @RequestBody ApiModels.SpeedRequest request) { return operations.speed(request.multiplier()); }
+
   @GetMapping("/putaway-requests/{id}")
   ApiModels.PutawayStatus request(@PathVariable("id") UUID id) { return store.request(id); }
 
   @GetMapping("/jobs/{id}")
   ResponseEntity<ApiModels.JobView> job(@PathVariable("id") UUID id) {
-    return store.job(id).map(job -> ResponseEntity.ok(new ApiModels.JobView(job.id(), job.requestId(), job.sequence(), job.loadId(),
+    return store.job(id).map(job -> ResponseEntity.ok(new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(),
         job.source(), job.destination(), job.status(), job.route()))).orElseGet(() -> ResponseEntity.notFound().build());
   }
 }

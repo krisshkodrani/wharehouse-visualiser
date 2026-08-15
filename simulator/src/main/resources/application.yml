@@ -7,4 +7,8 @@ warehouse:
   mqtt-url: ${MQTT_URL:tcp://localhost:1883}
   mqtt-user: ${MQTT_USER:warehouse}
   mqtt-password: ${MQTT_PASSWORD:warehouse}
-  speed: ${AGV_SPEED:4.0}
+  speed: ${AGV_SPEED:2.5}
+  loaded-speed: ${AGV_LOADED_SPEED:1.8}
+  docking-speed: ${AGV_DOCKING_SPEED:0.7}
+  acceleration: ${AGV_ACCELERATION:1.0}
+  braking: ${AGV_BRAKING:1.5}

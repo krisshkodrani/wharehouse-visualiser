@@ -18,7 +18,7 @@ class JobExecutionService {
   public void executing(UUID jobId) {
     store.job(jobId).ifPresent(job -> {
       store.markExecuting(jobId);
-      events.publish("JOB_UPDATED", new ApiModels.JobView(job.id(), job.requestId(), job.sequence(), job.loadId(), job.source(), job.destination(), "EXECUTING", job.route()));
+      events.publish("TRANSPORT_TASK_UPDATED", new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(), job.source(), job.destination(), "EXECUTING", job.route()));
     });
   }
 
@@ -36,10 +36,21 @@ class JobExecutionService {
     store.job(jobId).ifPresent(job -> {
       if (!job.route().isEmpty() && job.route().getLast().equals(lastNodeId) && !"COMPLETED".equals(job.status())) {
         store.complete(job);
-        events.publish("JOB_UPDATED", new ApiModels.JobView(job.id(), job.requestId(), job.sequence(), job.loadId(), job.source(), job.destination(), "COMPLETED", job.route()));
+        store.finishDispatch(jobId);
+        events.publish("TRANSPORT_TASK_UPDATED", new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(), job.source(), job.destination(), "COMPLETED", job.route()));
         events.publish("INVENTORY_UPDATED", store.snapshot());
       }
     });
-    dispatch.dispatchNext();
+    if (!dispatch.dispatchNext()) dispatch.parkIfIdle();
+  }
+
+  void agvIdle() { dispatch.dispatchNext(); }
+
+  void releaseNext(UUID taskId) { dispatch.releaseNext(taskId); }
+
+  @Transactional
+  void cancelled(UUID taskId) {
+    store.completeCancellation(taskId);
+    events.publish("TRANSPORT_TASK_CANCELLED", store.snapshot());
   }
 }

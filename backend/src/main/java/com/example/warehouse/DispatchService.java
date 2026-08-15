@@ -4,10 +4,12 @@ import com.example.warehouse.vda.Vda5050;
 import com.example.warehouse.vda.VdaSchemaValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -24,16 +26,72 @@ class DispatchService {
   }
 
   @Transactional
-  public void dispatchNext() {
-    store.nextQueuedJob().ifPresent(job -> {
-      Vda5050.Order order = order(job);
-      validator.validate("order", order);
-      store.markDispatched(job.id(), write(order));
-      events.publish("JOB_UPDATED", view(job, "DISPATCHED"));
+  public boolean dispatchNext() {
+    var next = store.nextQueuedJob();
+    if (next.isEmpty()) return false;
+    var job = next.get();
+    Vda5050.Order order = order(job);
+    validator.validate("order", order);
+    String payload = write(order);
+    store.recordDispatch(job.id(), order.orderId(), order.orderUpdateId(), payload);
+    store.markDispatched(job.id(), payload);
+    events.publish("TRANSPORT_TASK_UPDATED", view(job, "DISPATCHED"));
+    return true;
+  }
+
+  @Transactional
+  public void releaseNext(UUID taskId) {
+    store.latestDispatch(taskId).ifPresent(latest -> {
+      try {
+        Vda5050.Order current = mapper.readValue(latest.payload(), Vda5050.Order.class);
+        long released = current.nodes().stream().filter(Vda5050.Node::released).count();
+        if (released >= current.nodes().size()) return;
+        int releaseThrough = (int) Math.min(current.nodes().size(), released + 2);
+        List<Vda5050.Node> nodes = new ArrayList<>();
+        for (int index = 0; index < current.nodes().size(); index++) {
+          Vda5050.Node node = current.nodes().get(index);
+          nodes.add(new Vda5050.Node(node.nodeId(), node.sequenceId(), index < releaseThrough, node.nodePosition(), node.actions()));
+        }
+        List<Vda5050.Edge> edges = new ArrayList<>();
+        for (int index = 0; index < current.edges().size(); index++) {
+          Vda5050.Edge edge = current.edges().get(index);
+          edges.add(new Vda5050.Edge(edge.edgeId(), edge.sequenceId(), index < releaseThrough - 1, edge.actions(), edge.maximumSpeed()));
+        }
+        Vda5050.Order update = new Vda5050.Order(System.currentTimeMillis() & 0xffffffffL, Vda5050.now(), current.version(),
+            current.manufacturer(), current.serialNumber(), current.orderId(), current.orderUpdateId() + 1, nodes, edges);
+        validator.validate("order", update);
+        String payload = write(update);
+        store.enqueueOrderUpdate(taskId, update.orderId(), update.orderUpdateId(), payload);
+        events.publish("VDA_ORDER_UPDATED", Map.of("taskId", taskId, "orderUpdateId", update.orderUpdateId(),
+            "releasedNodes", releaseThrough, "totalNodes", nodes.size()));
+      } catch (Exception exception) {
+        throw new IllegalStateException("Could not extend VDA base", exception);
+      }
     });
   }
 
-  Vda5050.Order order(WarehouseStore.JobRow job) {
+  @Scheduled(fixedDelay = 3000, initialDelay = 5000)
+  public void parkIfIdle() {
+    record Candidate(WarehouseStore.ParkingRow parking, List<String> route, double distance) {}
+    Map<String, WarehouseStore.NodeRow> positions = store.nodes().stream().collect(java.util.stream.Collectors.toMap(WarehouseStore.NodeRow::id, node -> node));
+    var candidate = store.parkingTargets().stream().map(parking -> {
+      List<String> route = routes.routeFromAgvToNode(parking.nodeId());
+      double distance = 0;
+      for (int index = 1; index < route.size(); index++) {
+        var from = positions.get(route.get(index - 1)); var to = positions.get(route.get(index));
+        distance += Math.hypot(to.x() - from.x(), to.z() - from.z());
+      }
+      return new Candidate(parking, route, distance);
+    }).min(Comparator.comparingDouble(Candidate::distance).thenComparing(value -> value.parking().id()));
+    candidate.ifPresent(value -> {
+      Vda5050.Order order = movementOrder(value.route(), value.parking());
+      validator.validate("order", order);
+      if (store.enqueueParking(value.parking().id(), write(order)))
+        events.publish("AGV_PARKING_DISPATCHED", Map.of("parkingId", value.parking().id(), "route", value.route()));
+    });
+  }
+
+  Vda5050.Order order(WarehouseStore.TaskRow job) {
     Map<String, WarehouseStore.NodeRow> positions = store.nodes().stream().collect(java.util.stream.Collectors.toMap(WarehouseStore.NodeRow::id, node -> node));
     List<String> repositionRoute = routes.routeFromAgv(job.source());
     List<String> completeRoute = new ArrayList<>(repositionRoute);
@@ -49,20 +107,57 @@ class DispatchService {
       List<Vda5050.Action> actions = new ArrayList<>();
       if (index == pickupIndex) actions.add(action("pick", job.loadId(), job.source()));
       if (index == completeRoute.size() - 1) actions.add(action("drop", job.loadId(), job.destination()));
-      nodes.add(new Vda5050.Node(id, index * 2L, true, new Vda5050.NodePosition(position.x(), position.z(), "linz", .25), actions));
-      if (index > 0) edges.add(new Vda5050.Edge(completeRoute.get(index - 1) + "-" + id, index * 2L - 1, true, List.of(), 1.4));
+      boolean released = index < Math.min(3, completeRoute.size());
+      nodes.add(new Vda5050.Node(id, index * 2L, released, new Vda5050.NodePosition(position.x(), position.z(), "linz", deviation()), actions));
+      if (index > 0) edges.add(new Vda5050.Edge(completeRoute.get(index - 1) + "-" + id, index * 2L - 1, released, List.of(), 2.5));
     }
     return new Vda5050.Order(System.currentTimeMillis() & 0xffffffffL, Vda5050.now(), Vda5050.VERSION,
         Vda5050.MANUFACTURER, Vda5050.SERIAL_NUMBER, job.id().toString(), 0, nodes, edges);
   }
 
-  private static Vda5050.Action action(String type, String loadId, String locationId) {
-    return new Vda5050.Action(type, UUID.randomUUID().toString(), "HARD", List.of(
-        new Vda5050.ActionParameter("loadId", loadId), new Vda5050.ActionParameter("locationId", locationId)));
+  Vda5050.Order movementOrder(List<String> route, WarehouseStore.ParkingRow parking) {
+    Map<String, WarehouseStore.NodeRow> positions = store.nodes().stream().collect(java.util.stream.Collectors.toMap(WarehouseStore.NodeRow::id, node -> node));
+    List<Vda5050.Node> nodes = new ArrayList<>();
+    List<Vda5050.Edge> edges = new ArrayList<>();
+    if (route.size() == 1) {
+      String id = route.getFirst();
+      WarehouseStore.NodeRow position = positions.get(id);
+      nodes.add(new Vda5050.Node(id, 0, true,
+          new Vda5050.NodePosition(position.x(), position.z(), "linz", deviation()), List.of(dockAction(parking))));
+      return movementOrder(nodes, edges);
+    }
+    for (int index = 0; index < route.size(); index++) {
+      String id = route.get(index);
+      WarehouseStore.NodeRow position = positions.get(id);
+      List<Vda5050.Action> actions = index == route.size() - 1 ? List.of(dockAction(parking)) : List.of();
+      nodes.add(new Vda5050.Node(id, index * 2L, true, new Vda5050.NodePosition(position.x(), position.z(), "linz", deviation()), actions));
+      if (index > 0) edges.add(new Vda5050.Edge(route.get(index - 1) + "-" + id, index * 2L - 1, true, List.of(), .7));
+    }
+    return movementOrder(nodes, edges);
   }
 
-  private static ApiModels.JobView view(WarehouseStore.JobRow job, String status) {
-    return new ApiModels.JobView(job.id(), job.requestId(), job.sequence(), job.loadId(), job.source(), job.destination(), status, job.route());
+  private Vda5050.Action dockAction(WarehouseStore.ParkingRow parking) {
+    return new Vda5050.Action("dock", UUID.randomUUID().toString(), "HARD", List.of(
+        new Vda5050.ActionParameter("stationId", parking.id()), new Vda5050.ActionParameter("targetTheta", parking.theta())));
+  }
+
+  private static Vda5050.AllowedDeviationXY deviation() { return new Vda5050.AllowedDeviationXY(.25, .25, 0); }
+
+  private Vda5050.Order movementOrder(List<Vda5050.Node> nodes, List<Vda5050.Edge> edges) {
+    return new Vda5050.Order(System.currentTimeMillis() & 0xffffffffL, Vda5050.now(), Vda5050.VERSION,
+        Vda5050.MANUFACTURER, Vda5050.SERIAL_NUMBER, UUID.randomUUID().toString(), 0, nodes, edges);
+  }
+
+  private Vda5050.Action action(String type, String loadId, String locationId) {
+    WarehouseStore.HandlingRow handling = store.handling(locationId);
+    return new Vda5050.Action(type, UUID.randomUUID().toString(), "HARD", List.of(
+        new Vda5050.ActionParameter("loadId", loadId), new Vda5050.ActionParameter("locationId", locationId),
+        new Vda5050.ActionParameter("targetX", handling.x()), new Vda5050.ActionParameter("targetZ", handling.z()),
+        new Vda5050.ActionParameter("targetTheta", handling.theta()), new Vda5050.ActionParameter("targetHeight", handling.height())));
+  }
+
+  private static ApiModels.JobView view(WarehouseStore.TaskRow job, String status) {
+    return new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(), job.source(), job.destination(), status, job.route());
   }
 
   private String write(Object value) {

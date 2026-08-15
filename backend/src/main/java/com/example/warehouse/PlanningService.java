@@ -16,10 +16,14 @@ class PlanningService {
   PlanningService(WarehouseStore store, PlanningWorker worker) { this.store = store; this.worker = worker; }
 
   ApiModels.PutawayAccepted submit(ApiModels.PutawayRequest request) {
+    return submit(request.inboundLoadIds(), "NORMAL", request.operatorPrompt());
+  }
+
+  ApiModels.PutawayAccepted submit(List<String> loadIds, String priority, String objective) {
     store.requireRunning();
     UUID id = UUID.randomUUID();
-    store.createRequest(id, "PUTAWAY", request.operatorPrompt(), request.inboundLoadIds());
-    worker.plan(id, request);
+    store.createRequest(id, "PUTAWAY", priority, objective, store.runtime().scenarioId(), loadIds);
+    worker.plan(id, new ApiModels.PutawayRequest(loadIds, objective));
     return new ApiModels.PutawayAccepted(id, "PLANNING");
   }
 }

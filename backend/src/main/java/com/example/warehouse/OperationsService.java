@@ -34,9 +34,53 @@ class OperationsService {
   }
 
   @Transactional
+  ApiModels.TransportOrderView outbound(ApiModels.TransportOrderRequest request) {
+    UUID id = store.createOutbound(request.loadIds(), request.priority(), request.objective(), store.runtime().scenarioId(), routes);
+    events.publish("TRANSPORT_ORDER_UPDATED", store.transportOrder(id).orElseThrow());
+    dispatch.dispatchNext();
+    return store.transportOrder(id).orElseThrow();
+  }
+
+  java.util.List<ApiModels.ScenarioPreset> scenarioPresets() { return store.scenarioPresets(); }
+
+  @Transactional
+  ApiModels.WarehouseSnapshot seedScenario(String presetId) {
+    store.seedScenario(presetId, routes);
+    mqtt.publishControl("RESET", store.runtime());
+    dispatch.dispatchNext();
+    ApiModels.WarehouseSnapshot snapshot = store.snapshot();
+    events.publish("SCENARIO_CHANGED", snapshot);
+    return snapshot;
+  }
+
+  @Transactional
+  ApiModels.WarehouseSnapshot resetScenario() {
+    ApiModels.RuntimeView runtime = store.reset();
+    mqtt.publishControl("RESET", runtime);
+    ApiModels.WarehouseSnapshot snapshot = store.snapshot();
+    events.publish("SCENARIO_CHANGED", snapshot);
+    return snapshot;
+  }
+
+  @Transactional
+  ApiModels.TransportOrderView cancel(UUID orderId) {
+    store.activeTaskForOrder(orderId).ifPresent(task -> mqtt.publishInstantAction("cancelOrder", task.id()));
+    ApiModels.TransportOrderView order = store.cancelOrder(orderId);
+    events.publish("TRANSPORT_ORDER_UPDATED", order);
+    return order;
+  }
+
+  void demoEvent(ApiModels.DemoEventRequest request) {
+    String type = request.type().trim().toUpperCase(java.util.Locale.ROOT);
+    if (!java.util.Set.of("VDA_REJECTION", "BLOCK_ROUTE").contains(type)) throw new IllegalArgumentException("Unsupported demo event");
+    events.publish(type, java.util.Map.of("taskId", request.taskId() == null ? "" : request.taskId().toString(),
+        "message", "VDA_REJECTION".equals(type) ? "Order rejected: unsupported demo action parameter" : "Route blocked; replanning requested"));
+  }
+
+  @Transactional
   ApiModels.RuntimeView pause() {
     ApiModels.RuntimeView runtime = store.setRuntime("PAUSED");
-    mqtt.publishControl("PAUSE", runtime);
+    mqtt.publishInstantAction("startPause", null);
     events.publish("OPERATIONS_PAUSED", store.snapshot());
     return runtime;
   }
@@ -44,7 +88,7 @@ class OperationsService {
   @Transactional
   ApiModels.RuntimeView resume() {
     ApiModels.RuntimeView runtime = store.setRuntime("RUNNING");
-    mqtt.publishControl("RESUME", runtime);
+    mqtt.publishInstantAction("stopPause", null);
     events.publish("OPERATIONS_RESUMED", store.snapshot());
     dispatch.dispatchNext();
     return runtime;
@@ -55,6 +99,14 @@ class OperationsService {
     ApiModels.RuntimeView runtime = store.reset();
     mqtt.publishControl("RESET", runtime);
     events.publish("SIMULATION_RESET", store.snapshot());
+    return runtime;
+  }
+
+  @Transactional
+  ApiModels.RuntimeView speed(int multiplier) {
+    ApiModels.RuntimeView runtime = store.setTimeScale(multiplier);
+    mqtt.publishControl("SET_TIME_SCALE", runtime);
+    events.publish("SIMULATION_SPEED_CHANGED", runtime);
     return runtime;
   }
 

@@ -25,6 +25,10 @@ class RoutePlanner {
     return routeNodes(store.nearestNodeToAgv().id(), store.nodeForLocation(destinationLocation));
   }
 
+  List<String> routeFromAgvToNode(String destinationNode) {
+    return routeNodes(store.nearestNodeToAgv().id(), destinationNode);
+  }
+
   private List<String> routeNodes(String start, String goal) {
     Map<String, WarehouseStore.NodeRow> nodes = new HashMap<>();
     store.nodes().forEach(node -> nodes.put(node.id(), node));

@@ -26,4 +26,4 @@ warehouse:
   openrouter-api-key: ${OPENROUTER_API_KEY:}
   openrouter-model: ${OPENROUTER_MODEL:openai/gpt-4o-mini}
   openrouter-provider: ${OPENROUTER_PROVIDER:}
-  openrouter-timeout-seconds: ${OPENROUTER_TIMEOUT_SECONDS:20}
+  openrouter-timeout-seconds: ${OPENROUTER_TIMEOUT_SECONDS:60}

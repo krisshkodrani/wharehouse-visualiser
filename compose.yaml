@@ -2,6 +2,7 @@ name: warehouse-visualizer
 services:
   postgres:
     image: postgres:17-bookworm
+    container_name: warehouse-visualizer-postgres-live
     environment:
       POSTGRES_DB: warehouse
       POSTGRES_USER: warehouse
@@ -12,7 +13,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U warehouse -d warehouse"]
       interval: 3s
       timeout: 3s
-      retries: 20
+      retries: 40
+      start_period: 10m
 
   mosquitto:
     image: eclipse-mosquitto:2.0.21
@@ -46,6 +48,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       OPENROUTER_PROVIDER: ${OPENROUTER_PROVIDER:-}
+      OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-60}
     depends_on:
       postgres: { condition: service_healthy }
       mosquitto: { condition: service_healthy }
@@ -63,7 +66,11 @@ services:
       MQTT_URL: tcp://mosquitto:1883
       MQTT_USER: warehouse
       MQTT_PASSWORD: warehouse
-      AGV_SPEED: ${AGV_SPEED:-4.0}
+      AGV_SPEED: ${AGV_SPEED:-2.5}
+      AGV_LOADED_SPEED: ${AGV_LOADED_SPEED:-1.8}
+      AGV_DOCKING_SPEED: ${AGV_DOCKING_SPEED:-0.7}
+      AGV_ACCELERATION: ${AGV_ACCELERATION:-1.0}
+      AGV_BRAKING: ${AGV_BRAKING:-1.5}
     depends_on:
       mosquitto: { condition: service_healthy }
       backend: { condition: service_healthy }
@@ -86,4 +93,5 @@ services:
 
 volumes:
   warehouse-postgres17:
+    name: ${POSTGRES_VOLUME_NAME:-warehouse-visualizer_warehouse-postgres17}
   warehouse-mosquitto:

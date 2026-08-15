@@ -9,10 +9,10 @@ import java.io.InputStream;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/** Validates the demo's strict VDA 5050 v3 profile before publish and after receipt. */
+/** Validates VDA 5050 v3 messages before publish and after receipt. */
 public final class VdaSchemaValidator {
   private final ObjectMapper mapper;
-  private final JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V7);
+  private final JsonSchemaFactory factory = JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012);
 
   public VdaSchemaValidator(ObjectMapper mapper) {
     this.mapper = mapper;
