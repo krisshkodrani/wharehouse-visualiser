@@ -1,0 +1,132 @@
+openapi: 3.1.0
+info:
+  title: Warehouse Control Tower API
+  version: 0.1.0
+  description: Operator-facing commands and read models. Legacy putaway/job routes are intentionally omitted.
+servers:
+  - url: /api/v1
+paths:
+  /scenario-presets:
+    get:
+      operationId: listScenarioPresets
+      responses:
+        "200":
+          description: Deterministic scenario catalogue
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/ScenarioPreset" } }
+  /warehouses/linz/scenario:
+    post:
+      operationId: seedScenario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [presetId]
+              properties: { presetId: { type: string } }
+      responses:
+        "201": { $ref: "#/components/responses/Snapshot" }
+        "400": { $ref: "#/components/responses/Problem" }
+  /warehouses/linz/scenario/reset:
+    post:
+      operationId: resetScenario
+      responses:
+        "200": { $ref: "#/components/responses/Snapshot" }
+  /warehouses/linz/snapshot:
+    get:
+      operationId: getWarehouseSnapshot
+      responses:
+        "200": { $ref: "#/components/responses/Snapshot" }
+  /warehouses/linz/transport-orders:
+    get:
+      operationId: listTransportOrders
+      responses:
+        "200":
+          description: Priority-ordered transport orders
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: "#/components/schemas/TransportOrder" } }
+    post:
+      operationId: createTransportOrder
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          schema: { type: string, maxLength: 200 }
+          required: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTransportOrder" }
+      responses:
+        "202":
+          description: Accepted normalized order
+          content: { application/json: { schema: { $ref: "#/components/schemas/TransportOrder" } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+  /warehouses/linz/transport-orders/{orderId}:
+    get:
+      operationId: getTransportOrder
+      parameters: [{$ref: "#/components/parameters/OrderId"}]
+      responses:
+        "200":
+          description: Order, tasks, and VDA dispatch audit
+          content: { application/json: { schema: { $ref: "#/components/schemas/TransportOrder" } } }
+        "404": { description: Unknown order }
+  /warehouses/linz/transport-orders/{orderId}/cancel:
+    post:
+      operationId: cancelTransportOrder
+      parameters: [{$ref: "#/components/parameters/OrderId"}]
+      responses:
+        "200":
+          description: Cancelled or cancellation-requested order
+          content: { application/json: { schema: { $ref: "#/components/schemas/TransportOrder" } } }
+        "409": { $ref: "#/components/responses/Problem" }
+components:
+  parameters:
+    OrderId: { in: path, name: orderId, required: true, schema: { type: string, format: uuid } }
+  responses:
+    Snapshot:
+      description: Authoritative warehouse projection
+      content: { application/json: { schema: { type: object, additionalProperties: true } } }
+    Problem:
+      description: RFC 9457 problem details
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    ScenarioPreset:
+      type: object
+      required: [id, name, description, storedLoads, inboundLoads, orderType, orderLoads, priority, agvBattery]
+      additionalProperties: true
+    CreateTransportOrder:
+      type: object
+      required: [type, priority, loadIds]
+      properties:
+        type: { type: string, enum: [PUTAWAY, OUTBOUND] }
+        priority: { type: string, enum: [NORMAL, HIGH, URGENT] }
+        loadIds: { type: array, minItems: 1, uniqueItems: true, items: { type: string } }
+        objective: { type: [string, "null"] }
+    TransportOrder:
+      type: object
+      required: [id, type, priority, status, tasks, vdaDispatches]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        priority: { type: string }
+        status: { type: string }
+        tasks: { type: array, items: { type: object, additionalProperties: true } }
+        vdaDispatches: { type: array, items: { type: object, additionalProperties: true } }
+      additionalProperties: true
+    Problem:
+      type: object
+      required: [type, title, status, detail, instance, correlationId]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        correlationId: { type: string }

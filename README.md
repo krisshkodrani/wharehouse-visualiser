@@ -4,7 +4,7 @@ An OpenUI5 and Babylon.js warehouse control tower backed by Spring Boot, Postgre
 
 > Reference implementation for product and system-design discussion. It is not VDA-certified, a functional-safety component, or a production deployment.
 
-[Architecture](docs/ARCHITECTURE.md) · [Product brief](docs/PRODUCT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
+[Architecture](docs/ARCHITECTURE.md) · [Product brief](docs/PRODUCT.md) · [OpenAPI](docs/openapi.yaml) · [MQTT contract](docs/MQTT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
 
 [![Warehouse control tower walkthrough](artifacts/warehouse-control-tower.png)](artifacts/warehouse-control-tower.webm)
 
