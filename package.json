@@ -30,7 +30,7 @@
     "@types/qunit": "^2.19.12",
     "@ui5/cli": "^4.0.62",
     "rollup": "^4.62.4",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "ui5-tooling-modules": "^3.30.0",
     "ui5-tooling-transpile": "^3.6.0"
   }
