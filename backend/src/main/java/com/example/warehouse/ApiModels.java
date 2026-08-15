@@ -12,12 +12,14 @@ import java.util.UUID;
 public final class ApiModels {
   private ApiModels() {}
 
-  public record RackView(String id, String name, double x, double z, double rotationY, int bays) {}
+  public record RackView(String id, String name, double x, double z, double rotationY, int bays, String canonicalId) {}
   public record LocationView(String id, String name, String type, int capacity, int occupied, int reserved, double x, double z,
       String rackId, Integer bayIndex, Integer levelIndex, double rotationY, Double operatingWidth, Double operatingDepth,
-      Double handlingX, Double handlingZ, Double handlingTheta, Double handlingHeight) {}
+      Double handlingX, Double handlingZ, Double handlingTheta, Double handlingHeight, String canonicalId) {}
   public record ObstacleView(String id, String type, double x, double z, double width, double depth, double rotationY, double height) {}
-  public record LoadView(String id, String item, String status, String locationId, Instant receivedAt, Instant shippedAt) {}
+  public record LoadView(String id, String item, String status, String locationId, String canonicalLocationId, Instant receivedAt, Instant shippedAt) {}
+  public record CartonView(String id, String palletId, String sku, int quantity, String status, String locationId,
+      Instant pickedAt, Instant shippedAt) {}
   public record AgvView(String id, double x, double z, double theta, double velocity, double battery, String status, UUID taskId,
       boolean charging, String currentStationId, String handlingPhase, double forkHeight, double forkExtension, String carriedLoadId) {}
   public record JobView(UUID id, UUID requestId, int sequence, String loadId, String source, String destination, String status, List<String> route) {}
@@ -33,11 +35,14 @@ public final class ApiModels {
   public record ScenarioView(String id, String name, boolean configured) {}
   public record RuntimeView(String operationState, long simulationEpoch, int timeScale, String scenarioId,
       boolean scenarioConfigured, Instant changedAt) {}
-  public record ConveyorTransferView(UUID id, String loadId, String status, Instant enteredAt, Instant exitDueAt, Instant completedAt) {}
+  public record ConveyorTransferView(UUID id, String loadId, String cartonId, String conveyorId, String status,
+      Instant enteredAt, Instant exitDueAt, Instant completedAt) {}
+  public record RobotCellView(String id, String phase, UUID activePickJobId, Instant updatedAt) {}
   public record WarehouseSnapshot(String id, String name, double width, double depth, List<RackView> racks,
       List<LocationView> locations, List<LoadView> loads, List<AgvView> agvs, List<JobView> jobs,
       List<TransportOrderView> transportOrders, List<TransportTaskView> tasks, ScenarioView scenario,
-      RuntimeView runtime, List<ConveyorTransferView> conveyorTransfers, List<ObstacleView> obstacles) {}
+      RuntimeView runtime, List<ConveyorTransferView> conveyorTransfers, List<ObstacleView> obstacles,
+      List<CartonView> cartons, List<RobotCellView> robotCells) {}
 
   public record PutawayRequest(@NotEmpty List<String> inboundLoadIds, String operatorPrompt) {}
   public record PutawayAccepted(UUID requestId, String status) {}
@@ -55,7 +60,7 @@ public final class ApiModels {
   public record Placement(String loadId, String slotId, String reason) {}
   public record PlacementPlan(List<Placement> placements) {}
   public record BlockedTile(int column, int row, double centerX, double centerZ, String reason, String referenceId) {}
-  public record MapStation(String id, String type, double x, double z, double rotationY, Double width, Double depth) {}
+  public record MapStation(String id, String type, double x, double z, double rotationY, Double width, Double depth, String canonicalId) {}
   public record PlanningMap(double tileSize, double originX, double originZ, int columns, int rows,
       boolean omittedTilesArePassable, List<BlockedTile> blockedTiles, List<MapStation> stations,
       List<Map<String, Object>> routeNodes, List<Map<String, Object>> routeEdges) {}

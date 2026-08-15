@@ -5,8 +5,10 @@ import com.example.warehouse.vda.VdaSchemaValidator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
@@ -31,9 +33,9 @@ class MqttGateway {
   private final MqttClient client;
   private final MqttConnectOptions options;
   private final ExecutorService mqttCallbacks = Executors.newSingleThreadExecutor(Thread.ofPlatform().name("backend-mqtt-callback").factory());
-  private final AtomicReference<InboundMessage> latestVisualization = new AtomicReference<>();
-  private final AtomicReference<InboundMessage> latestHandling = new AtomicReference<>();
-  private final AtomicReference<ApiModels.AgvView> liveAgv = new AtomicReference<>();
+  private final ConcurrentHashMap<String, InboundMessage> latestVisualizations = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, InboundMessage> latestHandlings = new ConcurrentHashMap<>();
+  private final ConcurrentHashMap<String, ApiModels.AgvView> liveAgvs = new ConcurrentHashMap<>();
   private final AtomicLong instantActionHeader = new AtomicLong();
 
   private record InboundMessage(String topic, MqttMessage message) {}
@@ -60,11 +62,11 @@ class MqttGateway {
       client.connect(options);
       // Control messages are commands, not durable state. Remove any retained
       // command left by an older deployment before the simulator subscribes.
-      client.publish(Vda5050.TOPIC_PREFIX + "/control", new byte[0], 1, true);
-      subscribe(Vda5050.TOPIC_PREFIX + "/state", this::onState);
-      subscribeLatest(Vda5050.TOPIC_PREFIX + "/visualization", latestVisualization);
-      subscribe(Vda5050.TOPIC_PREFIX + "/connection", this::onConnection);
-      subscribeLatest(Vda5050.TOPIC_PREFIX + "/handling", latestHandling);
+      for (String agvId : store.agvIds()) client.publish(Vda5050.topicPrefix(agvId) + "/control", new byte[0], 1, true);
+      subscribe(Vda5050.topicPrefix("+") + "/state", this::onState);
+      subscribeLatest(Vda5050.topicPrefix("+") + "/visualization", latestVisualizations);
+      subscribe(Vda5050.topicPrefix("+") + "/connection", this::onConnection);
+      subscribeLatest(Vda5050.topicPrefix("+") + "/handling", latestHandlings);
     } catch (Exception ignored) {
       // Health remains degraded through broker connectivity; retry on the next scheduled tick.
     }
@@ -87,10 +89,15 @@ class MqttGateway {
   }
 
   void publishControl(String command, ApiModels.RuntimeView runtime) {
+    for (String agvId : store.agvIds()) publishControl(command, runtime, agvId);
+  }
+
+  private void publishControl(String command, ApiModels.RuntimeView runtime, String agvId) {
     if (!client.isConnected()) return;
     try {
-      WarehouseStore.NodeRow home = store.locationPosition("PARK-01");
-      ApiModels.AgvView agv = store.agv();
+      String homeId = switch (agvId) { case "FL-02" -> "PARK-02"; case "FL-03" -> "PARK-03"; default -> "PARK-01"; };
+      WarehouseStore.NodeRow home = store.locationPosition(homeId);
+      ApiModels.AgvView agv = store.agv(agvId);
       boolean reset = "RESET".equals(command);
       java.util.Map<String, Object> control = new java.util.LinkedHashMap<>();
       control.put("command", command);
@@ -105,10 +112,10 @@ class MqttGateway {
       control.put("timeScale", runtime.timeScale());
       control.put("charging", reset || agv.charging());
       control.put("handlingPhase", reset ? "CHARGING" : agv.handlingPhase());
-      String stationId = reset ? "PARK-01" : agv.currentStationId();
+      String stationId = reset ? homeId : agv.currentStationId();
       if (stationId != null) control.put("stationId", stationId);
       String payload = mapper.writeValueAsString(control);
-      client.publish(Vda5050.TOPIC_PREFIX + "/control", payload.getBytes(StandardCharsets.UTF_8), 1, false);
+      client.publish(Vda5050.topicPrefix(agvId) + "/control", payload.getBytes(StandardCharsets.UTF_8), 1, false);
     } catch (Exception exception) {
       throw new IllegalStateException("Could not send simulator control", exception);
     }
@@ -120,10 +127,13 @@ class MqttGateway {
       java.util.List<Vda5050.ActionParameter> parameters = orderId == null ? java.util.List.of()
           : java.util.List.of(new Vda5050.ActionParameter("orderId", orderId.toString()));
       Vda5050.Action action = new Vda5050.Action(actionType, UUID.randomUUID().toString(), "NONE", parameters);
-      Vda5050.InstantActions request = new Vda5050.InstantActions(instantActionHeader.incrementAndGet(), Vda5050.now(),
-          Vda5050.VERSION, Vda5050.MANUFACTURER, Vda5050.SERIAL_NUMBER, java.util.List.of(action));
-      validator.validate("instantActions", request);
-      client.publish(Vda5050.TOPIC_PREFIX + "/instantActions", mapper.writeValueAsBytes(request), 1, false);
+      List<String> targets = orderId == null ? store.agvIds() : java.util.List.of(store.agvIdForTask(orderId).orElse("FL-01"));
+      for (String agvId : targets) {
+        Vda5050.InstantActions request = new Vda5050.InstantActions(instantActionHeader.incrementAndGet(), Vda5050.now(),
+            Vda5050.VERSION, Vda5050.MANUFACTURER, agvId, java.util.List.of(action));
+        validator.validate("instantActions", request);
+        client.publish(Vda5050.topicPrefix(agvId) + "/instantActions", mapper.writeValueAsBytes(request), 1, false);
+      }
     } catch (Exception exception) {
       throw new IllegalStateException("Could not publish VDA instant action", exception);
     }
@@ -139,25 +149,23 @@ class MqttGateway {
     });
   }
 
-  private void subscribeLatest(String topic, AtomicReference<InboundMessage> target) throws Exception {
+  private void subscribeLatest(String topic, ConcurrentHashMap<String, InboundMessage> target) throws Exception {
     client.subscribe(topic, 0, (receivedTopic, message) -> {
-      InboundMessage previous = target.getAndSet(new InboundMessage(receivedTopic, new MqttMessage(message.getPayload().clone())));
+      String agvId = serialFromTopic(receivedTopic);
+      InboundMessage previous = target.put(agvId, new InboundMessage(receivedTopic, new MqttMessage(message.getPayload().clone())));
       if (previous != null) metrics.telemetryCoalesced(receivedTopic);
     });
   }
 
   @Scheduled(fixedDelay = 50, initialDelay = 1000)
   void consumeLatestTelemetry() {
-    InboundMessage visualization = latestVisualization.getAndSet(null);
-    if (visualization != null) onVisualization(visualization.topic(), visualization.message());
-    InboundMessage handling = latestHandling.getAndSet(null);
-    if (handling != null) onHandling(handling.topic(), handling.message());
+    latestVisualizations.forEach((id, message) -> { if (latestVisualizations.remove(id, message)) onVisualization(message.topic(), message.message()); });
+    latestHandlings.forEach((id, message) -> { if (latestHandlings.remove(id, message)) onHandling(message.topic(), message.message()); });
   }
 
   @Scheduled(fixedDelay = 500, initialDelay = 1500)
   void persistLivePose() {
-    ApiModels.AgvView agv = liveAgv.get();
-    if (agv != null) store.updateAgvMotion(agv.x(), agv.z(), agv.theta(), agv.velocity(), agv.status(), agv.taskId());
+    liveAgvs.forEach((id, agv) -> store.updateAgvMotion(id, agv.x(), agv.z(), agv.theta(), agv.velocity(), agv.status(), agv.taskId()));
   }
 
   private void onState(String topic, MqttMessage message) {
@@ -165,14 +173,15 @@ class MqttGateway {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("state", json);
       Vda5050.State state = mapper.readValue(json, Vda5050.State.class);
+      String agvId = serialFromTopic(topic);
       metrics.mqttAccepted(topic);
-      if (state.powerSupply() != null) store.updatePower(state.powerSupply().stateOfCharge(), state.powerSupply().charging());
+      if (state.powerSupply() != null) store.updatePower(agvId, state.powerSupply().stateOfCharge(), state.powerSupply().charging());
       UUID jobId = uuid(state.orderId());
       if (jobId != null) {
         if (hasInstantAction(state, "cancelOrder", "FINISHED")) {
           execution.cancelled(jobId);
-          ApiModels.AgvView agv = store.agv();
-          liveAgv.set(agv);
+          ApiModels.AgvView agv = store.agv(agvId);
+          liveAgvs.put(agvId, agv);
           events.publish("AGV_UPDATED", agv);
           return;
         }
@@ -183,8 +192,8 @@ class MqttGateway {
           execution.completeIfArrived(jobId, state.lastNodeId());
         if (state.newBaseRequest()) execution.releaseNext(jobId);
       }
-      ApiModels.AgvView agv = store.agv();
-      liveAgv.set(agv);
+      ApiModels.AgvView agv = store.agv(agvId);
+      liveAgvs.put(agvId, agv);
       events.publish("AGV_UPDATED", agv);
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
@@ -197,17 +206,18 @@ class MqttGateway {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("visualization", json);
       Vda5050.Visualization telemetry = mapper.readValue(json, Vda5050.Visualization.class);
+      String agvId = serialFromTopic(topic);
       metrics.mqttAccepted(topic);
       Vda5050.Position position = telemetry.mobileRobotPosition();
       double speed = telemetry.velocity() == null ? 0 : Math.hypot(telemetry.velocity().vx(), telemetry.velocity().vy());
-      var current = liveAgv.get();
-      if (current == null) current = store.agv();
+      var current = liveAgvs.get(agvId);
+      if (current == null) current = store.agv(agvId);
       String status = speed > 0.01 ? "MOVING" : current.status();
       if (speed <= 0.01 && current.taskId() == null && !java.util.Set.of("PARKING","CHARGING","PARKED","DOCKING").contains(current.status())) status = "IDLE";
       ApiModels.AgvView updated = new ApiModels.AgvView(current.id(), position.x(), position.y(), position.theta(), speed,
           current.battery(), status, current.taskId(), current.charging(), current.currentStationId(), current.handlingPhase(),
           current.forkHeight(), current.forkExtension(), current.carriedLoadId());
-      liveAgv.set(updated);
+      liveAgvs.put(agvId, updated);
       events.publish("AGV_POSE", updated);
       if (current.velocity() > 0.01 && speed <= 0.01 && current.taskId() == null) execution.agvIdle();
     } catch (Exception exception) {
@@ -220,15 +230,16 @@ class MqttGateway {
   private void onHandling(String topic, MqttMessage message) {
     try {
       Map<String, Object> value = mapper.readValue(message.getPayload(), Map.class);
+      String agvId = serialFromTopic(topic);
       metrics.mqttAccepted(topic);
       String phase = String.valueOf(value.getOrDefault("phase", "IDLE"));
       double forkHeight = ((Number) value.getOrDefault("forkHeight", 0)).doubleValue();
       double forkExtension = ((Number) value.getOrDefault("forkExtension", 0)).doubleValue();
       String loadId = nullable(value.get("loadId"));
       String stationId = nullable(value.get("stationId"));
-      store.updateHandling(phase, forkHeight, forkExtension, loadId, stationId);
-      ApiModels.AgvView agv = store.agv();
-      liveAgv.set(agv);
+      store.updateHandling(agvId, phase, forkHeight, forkExtension, loadId, stationId);
+      ApiModels.AgvView agv = store.agv(agvId);
+      liveAgvs.put(agvId, agv);
       events.publish("AGV_HANDLING_UPDATED", agv);
       if ("CHARGING".equals(phase) || "PARKED".equals(phase)) execution.agvIdle();
     } catch (Exception exception) {
@@ -250,7 +261,7 @@ class MqttGateway {
       Vda5050.Connection connection = mapper.readValue(json, Vda5050.Connection.class);
       metrics.mqttAccepted(topic);
       events.publish("AGV_CONNECTION_UPDATED", connection);
-      if ("ONLINE".equals(connection.connectionState())) publishControl("SYNC", store.runtime());
+      if ("ONLINE".equals(connection.connectionState())) publishControl("SYNC", store.runtime(), serialFromTopic(topic));
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
@@ -259,6 +270,11 @@ class MqttGateway {
 
   private static UUID uuid(String value) {
     try { return value == null || value.isBlank() ? null : UUID.fromString(value); } catch (IllegalArgumentException ignored) { return null; }
+  }
+
+  private static String serialFromTopic(String topic) {
+    String[] parts = topic.split("/");
+    return parts.length >= 5 ? parts[4] : "FL-01";
   }
 
   private static boolean hasAction(Vda5050.State state, String type, String status) {

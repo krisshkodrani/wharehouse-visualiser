@@ -25,6 +25,10 @@ class RoutePlanner {
     return routeNodes(store.nearestNodeToAgv().id(), store.nodeForLocation(destinationLocation));
   }
 
+  List<String> routeFromAgv(String destinationLocation, String agvId) {
+    return routeNodes(store.nearestNodeToAgv(agvId).id(), store.nodeForLocation(destinationLocation));
+  }
+
   List<String> routeFromAgvToNode(String destinationNode) {
     return routeNodes(store.nearestNodeToAgv().id(), destinationNode);
   }
