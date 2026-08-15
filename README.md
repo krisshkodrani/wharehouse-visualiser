@@ -2,6 +2,12 @@
 
 An OpenUI5 and Babylon.js warehouse control tower backed by Spring Boot, PostgreSQL, MQTT, and a simulated autonomous forklift. Business-facing transport orders are decomposed into load-movement tasks and dispatched as schema-validated VDA 5050 v3.0.0 orders.
 
+> Reference implementation for product and system-design discussion. It is not VDA-certified, a functional-safety component, or a production deployment.
+
+[Architecture](docs/ARCHITECTURE.md) · [Product brief](docs/PRODUCT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
+
+[![Warehouse control tower walkthrough](artifacts/warehouse-control-tower.png)](artifacts/warehouse-control-tower.webm)
+
 ## Run locally with Docker
 
 Requirements: Docker Desktop with Compose v2.
@@ -45,7 +51,7 @@ This deletes the demo database and broker data.
 The frontend remains a standard UI5 project:
 
 ```powershell
-npm install
+npm ci
 npm run typecheck
 npm run build
 npm test
@@ -72,6 +78,8 @@ docker compose up -d --wait postgres mosquitto
 
 REST starts at `/api/v1`, WebSocket/STOMP at `/ws`, and MQTT topics use `vda5050/v3/demo/FL-01/{order,instantActions,state,visualization,connection}`.
 
+Transport-order creation accepts an optional `Idempotency-Key`; reuse with the same body returns the existing order and conflicting reuse returns RFC 9457 Problem Details. Operational metrics are available to the internal backend network at `/actuator/prometheus`.
+
 ## Interview demo path
 
 1. Select **Inbound surge** and point out the automatically created business order and six transport tasks.
@@ -83,3 +91,7 @@ REST starts at `/api/v1`, WebSocket/STOMP at `/ws`, and MQTT topics use `vda5050
 ## Deliberate demo limits
 
 The public data model and UI support nullable AGV assignment and multiple vehicles, but the demo simulates only FL-01. Authentication, TLS, and multi-AGV traffic arbitration remain outside the interview scope. Simulation speed, scenario reset, and failure injection are explicitly demo controls rather than VDA messages.
+
+## License
+
+Apache License 2.0. See [third-party notices](THIRD_PARTY_NOTICES.md) for VDA 5050, OpenUI5, Babylon.js, and other component attribution.
