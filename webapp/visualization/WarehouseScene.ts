@@ -6,7 +6,7 @@ import type { Vector3 as Vector3Type } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { TransformNode as TransformNodeType } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene as SceneType } from "@babylonjs/core/scene";
-import type { ApiAgv, LoadVisualDefinition, ObstacleDefinition, RackDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
+import type { ApiAgv, ConveyorVisualDefinition, LoadVisualDefinition, ObstacleDefinition, RackDefinition, RobotCellVisualDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
 
 const {
   ActionManager,
@@ -63,6 +63,7 @@ const OUTBOUND_CONVEYOR_START = -2.2;
 const OUTBOUND_CONVEYOR_END = 8.2;
 const OUTBOUND_CONVEYOR_LENGTH = OUTBOUND_CONVEYOR_END - OUTBOUND_CONVEYOR_START;
 const OUTBOUND_CONVEYOR_CENTER = (OUTBOUND_CONVEYOR_START + OUTBOUND_CONVEYOR_END) / 2;
+const OUTBOUND_CONVEYOR_LANES = [-0.78, 0.78];
 
 export default class WarehouseScene {
   private readonly engine: EngineType;
@@ -84,6 +85,10 @@ export default class WarehouseScene {
   private readonly cargoItems: CargoItem[] = [];
   private readonly inboundCargoItems: CargoItem[] = [];
   private readonly conveyorCargoItems: CargoItem[] = [];
+  private readonly companionAgvs = new Map<string, TransformNodeType>();
+  private robotCellRoot?: TransformNodeType;
+  private robotArm?: TransformNodeType;
+  private robotGripper?: TransformNodeType;
   private carriedCargo?: CargoItem;
   private inboundCardboardMaterial?: StandardMaterialType;
   private inboundPalletMaterial?: StandardMaterialType;
@@ -97,6 +102,7 @@ export default class WarehouseScene {
   private highlightMaterial?: StandardMaterialType;
   private lastPoseTelemetryAt = 0;
   private liveMotionBlocked = false;
+  private robotCellPhase = "IDLE";
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -140,10 +146,10 @@ export default class WarehouseScene {
     floor.material = floorMaterial;
     floor.parent = this.warehouseRoot;
     floor.receiveShadows = true;
-    const inboundStation = config.stations?.find((station) => station.type === "INBOUND") ?? {
+    const inboundStation = config.stations?.find((station) => station.canonicalId === "REC-STG-01" || station.type === "RECEIVING_STAGING" || station.type === "INBOUND") ?? {
       id: "INBOUND-01", type: "INBOUND", position: config.forkliftStops[0], rotationY: 0, width: 7, depth: 7
     } as StationDefinition;
-    const outboundStation = config.stations?.find((station) => station.type === "OUTBOUND") ?? {
+    const outboundStation = config.stations?.find((station) => station.canonicalId === "OUT-STG-01" || station.type === "OUTBOUND_STAGING" || station.type === "OUTBOUND") ?? {
       id: "OUTBOUND-01", type: "OUTBOUND", position: config.forkliftStops[1], rotationY: Math.PI, width: 7, depth: 6
     } as StationDefinition;
     this.createFloorMarkings(inboundStation, outboundStation);
@@ -152,13 +158,15 @@ export default class WarehouseScene {
       this.createRack(rack, config.accentColor);
     }
     for (const obstacle of config.obstacles ?? []) this.createObstacle(obstacle);
-    this.createParkingAreas(config.stations?.filter((station) => station.type === "PARKING_CHARGING") ?? []);
+    this.createParkingAreas(config.stations?.filter((station) => station.type === "PARKING_CHARGING" || station.type === "CHARGING_AREA") ?? []);
     this.createSign(config.signText, config.accentColor);
     this.createInboundStaging(inboundStation, config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
-    this.createOutboundConveyor(outboundStation, config.conveyorLoads ?? []);
+    this.createOutboundConveyor(outboundStation, config.conveyorLoads ?? [], config.conveyorTransfers ?? []);
+    this.createRobotCell(outboundStation, config.robotCells ?? []);
     this.forkliftStops = [Vector3.FromArray(config.forkliftStops[0]), Vector3.FromArray(config.forkliftStops[1])];
     this.nextForkliftStop = 1;
     this.createForklift(previousForkliftPosition ?? this.forkliftStops[0], config.accentColor);
+    this.createCompanionAgvs(config.fleetAgvs ?? []);
     if (previousForkliftRotation !== undefined && this.forklift) this.forklift.rotation.y = previousForkliftRotation;
     if (config.carriedLoadId) this.createLiveCarriedCargo(config.carriedLoadId);
     this.updateChargingIndicators(config.chargingStationId);
@@ -177,6 +185,8 @@ export default class WarehouseScene {
     this.syncRackCargo(config.racks);
     this.syncInboundCargo(config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
     this.syncConveyorCargo(config.conveyorLoads ?? []);
+    this.syncRobotCell(config.robotCells ?? []);
+    this.syncCompanionAgvs(config.fleetAgvs ?? []);
     this.updateChargingIndicators(config.chargingStationId);
   }
 
@@ -1011,36 +1021,42 @@ export default class WarehouseScene {
     if (JSON.stringify(previousIds) !== JSON.stringify(currentIds)) this.telemetry("INBOUND_LOADS_SYNCED", { previousIds, currentIds });
   }
 
-  private createOutboundConveyor(station: StationDefinition, loads: LoadVisualDefinition[]): void {
+  private createOutboundConveyor(station: StationDefinition, loads: LoadVisualDefinition[], transfers: ConveyorVisualDefinition[]): void {
     this.outboundStation = station;
     const frame = this.createMetalMaterial("conveyorFrame", "#59636c", 72);
     const belt = this.createMaterial("conveyorBelt", "#20262b");
     const safety = this.createMaterial("conveyorSafety", "#e87518");
     const cardboard = this.createCardboardMaterial("outboundCardboard");
     this.conveyorCardboardMaterial = cardboard;
-    const deck = MeshBuilder.CreateBox("outboundConveyor", { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.18, depth: 1.15 }, this.scene);
-    const center = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, 0);
-    deck.position.set(center.x, 0.72, center.z); deck.rotation.y = station.rotationY; deck.material = belt; deck.parent = this.warehouseRoot ?? null;
-    for (const z of [-0.68, 0.68]) {
-      const rail = MeshBuilder.CreateBox("conveyorRail", { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.3, depth: 0.1 }, this.scene);
-      const point = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, z);
-      rail.position.set(point.x, 0.88, point.z); rail.rotation.y = station.rotationY; rail.material = safety; rail.parent = this.warehouseRoot ?? null;
-    }
-    const rollerSpacing = 0.42;
-    const rollerCount = Math.floor(OUTBOUND_CONVEYOR_LENGTH / rollerSpacing);
-    for (let index = 0; index <= rollerCount; index += 1) {
-      const roller = MeshBuilder.CreateCylinder(`conveyorRoller-${index}`, { diameter: 0.18, height: 1.02, tessellation: 18 }, this.scene);
-      const point = this.stationPoint(station, OUTBOUND_CONVEYOR_START + index * rollerSpacing, 0);
-      roller.rotation.x = Math.PI / 2; roller.rotation.y = station.rotationY; roller.position.set(point.x, 0.84, point.z);
-      roller.material = frame; roller.parent = this.warehouseRoot ?? null;
-    }
-    for (const x of [-1.8, 0.8, 3.4, 6, 8]) for (const z of [-0.42, 0.42]) {
-      const leg = MeshBuilder.CreateBox("conveyorLeg", { width: 0.12, height: 0.7, depth: 0.12 }, this.scene);
-      const point = this.stationPoint(station, x, z);
-      leg.position.set(point.x, 0.35, point.z); leg.material = frame; leg.parent = this.warehouseRoot ?? null;
-    }
+    OUTBOUND_CONVEYOR_LANES.forEach((laneZ, laneIndex) => {
+      const deck = MeshBuilder.CreateBox(`outboundConveyor-${laneIndex + 1}`, { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.18, depth: 1.05 }, this.scene);
+      const center = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, laneZ);
+      deck.position.set(center.x, 0.72, center.z); deck.rotation.y = station.rotationY; deck.material = belt; deck.parent = this.warehouseRoot ?? null;
+      for (const z of [-0.58, 0.58]) {
+        const rail = MeshBuilder.CreateBox(`conveyorRail-${laneIndex + 1}`, { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.3, depth: 0.1 }, this.scene);
+        const point = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, laneZ + z);
+        rail.position.set(point.x, 0.88, point.z); rail.rotation.y = station.rotationY; rail.material = safety; rail.parent = this.warehouseRoot ?? null;
+      }
+      const rollerSpacing = 0.42;
+      const rollerCount = Math.floor(OUTBOUND_CONVEYOR_LENGTH / rollerSpacing);
+      for (let index = 0; index <= rollerCount; index += 1) {
+        const roller = MeshBuilder.CreateCylinder(`conveyorRoller-${laneIndex + 1}-${index}`, { diameter: 0.16, height: 0.92, tessellation: 18 }, this.scene);
+        const point = this.stationPoint(station, OUTBOUND_CONVEYOR_START + index * rollerSpacing, laneZ);
+        roller.rotation.x = Math.PI / 2; roller.rotation.y = station.rotationY; roller.position.set(point.x, 0.84, point.z);
+        roller.material = frame; roller.parent = this.warehouseRoot ?? null;
+      }
+      for (const x of [-1.8, 0.8, 3.4, 6, 8]) {
+        const leg = MeshBuilder.CreateBox(`conveyorLeg-${laneIndex + 1}`, { width: 0.12, height: 0.7, depth: 0.12 }, this.scene);
+        const point = this.stationPoint(station, x, laneZ);
+        leg.position.set(point.x, 0.35, point.z); leg.material = frame; leg.parent = this.warehouseRoot ?? null;
+      }
+      this.createFloorLabel(station, laneIndex === 0 ? "CONV-OUT-01" : "CONV-OUT-02", -0.2, laneZ + 0.05, 2.4, 0.42, "#d9f2e7");
+    });
     this.createOutboundDischargePortal(station, frame, safety);
-    loads.slice(0, 4).forEach((load, index) => this.addConveyorCargo(load, index, false));
+    loads.slice(0, 8).forEach((load, index) => {
+      const transfer = transfers.find((candidate) => candidate.loadId === load.id);
+      this.addConveyorCargo(load, index, false, transfer?.conveyorId ?? `CONV-OUT-0${index % 2 + 1}`);
+    });
   }
 
   private createOutboundDischargePortal(
@@ -1095,10 +1111,102 @@ export default class WarehouseScene {
     direction.parent = this.warehouseRoot ?? null;
   }
 
-  private addConveyorCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean): void {
+  private createRobotCell(station: StationDefinition, cells: RobotCellVisualDefinition[]): void {
+    const root = new TransformNode("robotCell-ROBOT-01", this.scene);
+    const anchor = this.stationPoint(station, -5, 0);
+    root.position.set(anchor.x, 0, anchor.z);
+    root.rotation.y = station.rotationY;
+    root.parent = this.warehouseRoot ?? null;
+    this.robotCellRoot = root;
+    const baseMaterial = this.createMetalMaterial("robotCellBase", "#4b5961", 84);
+    const armMaterial = this.createMaterial("robotCellArm", "#f3a712");
+    const safetyMaterial = this.createMaterial("robotCellSafety", "#ef7d19");
+    const cageMaterial = this.createMaterial("robotCellFence", "#8a9a9a");
+
+    const base = MeshBuilder.CreateCylinder("robotCellBase", { diameter: 1.2, height: .28, tessellation: 32 }, this.scene);
+    base.position.y = .15; base.material = baseMaterial; base.parent = root;
+    const shoulder = new TransformNode("robotCellShoulder", this.scene); shoulder.position.set(0, .65, 0); shoulder.parent = root;
+    const upper = MeshBuilder.CreateBox("robotArmUpper", { width: .38, height: 1.55, depth: .32 }, this.scene);
+    upper.position.set(0, .75, 0); upper.rotation.z = -.42; upper.material = armMaterial; upper.parent = shoulder;
+    const elbow = new TransformNode("robotCellElbow", this.scene); elbow.position.set(.32, 1.35, 0); elbow.parent = shoulder;
+    const forearm = MeshBuilder.CreateBox("robotArmForearm", { width: .3, height: 1.35, depth: .28 }, this.scene);
+    forearm.position.set(.25, .65, 0); forearm.rotation.z = .66; forearm.material = armMaterial; forearm.parent = elbow;
+    const wrist = new TransformNode("robotCellWrist", this.scene); wrist.position.set(.7, 1.12, 0); wrist.parent = elbow;
+    const wristJoint = MeshBuilder.CreateCylinder("robotArmWrist", { diameter: .28, height: .45, tessellation: 20 }, this.scene);
+    wristJoint.rotation.z = Math.PI / 2; wristJoint.material = baseMaterial; wristJoint.parent = wrist;
+    const gripper = MeshBuilder.CreateBox("robotGripper", { width: .48, height: .12, depth: .3 }, this.scene);
+    gripper.position.set(.35, 0, 0); gripper.material = safetyMaterial; gripper.parent = wrist;
+    this.robotArm = shoulder; this.robotGripper = wrist;
+
+    // Guarding surrounds the arm but leaves the east-side AGV presentation gate open.
+    for (const [x, z, width, depth] of [[0, -2.9, 7.4, .12], [0, 2.9, 7.4, .12], [-3.7, 0, .12, 5.8]] as number[][]) {
+      const fence = MeshBuilder.CreateBox("robotCellFence", { width, height: 1.4, depth }, this.scene);
+      fence.position.set(x, .7, z); fence.material = cageMaterial; fence.parent = root;
+      fence.visibility = .7;
+    }
+    for (const x of [-3.7, 3.7]) for (const z of [-2.9, 2.9]) {
+      const post = MeshBuilder.CreateCylinder("robotCellPost", { diameter: .12, height: 1.6, tessellation: 12 }, this.scene);
+      post.position.set(x, .8, z); post.material = safetyMaterial; post.parent = root;
+    }
+    const handoff = MeshBuilder.CreateBox("robotHandoffPad", { width: 2.2, height: .025, depth: 2.1 }, this.scene);
+    handoff.position.set(2.0, .02, 0); handoff.material = safetyMaterial; handoff.parent = root;
+    this.createFloorLabel(station, "ROBOT-01", -5, -3.45, 2.5, .55, "#fff1bf");
+    this.robotCellPhase = cells.find((cell) => cell.id === "ROBOT-01")?.phase ?? "IDLE";
+    this.syncRobotCell(cells);
+  }
+
+  private syncRobotCell(cells: RobotCellVisualDefinition[]): void {
+    const phase = cells.find((cell) => cell.id === "ROBOT-01")?.phase ?? "IDLE";
+    if (!this.robotArm || !this.robotGripper || phase === this.robotCellPhase) return;
+    this.robotCellPhase = phase;
+    const active = ["AT_HANDOFF", "PICKING", "PLACING"].includes(phase);
+    this.robotArm.rotation.y = active ? .35 : 0;
+    this.robotArm.rotation.z = phase === "PICKING" ? -.15 : phase === "PLACING" ? .35 : -.42;
+    this.robotGripper.rotation.z = phase === "PLACING" ? -.28 : 0;
+    this.telemetry("ROBOT_PHASE", { robotId: "ROBOT-01", phase });
+  }
+
+  private createCompanionAgvs(agvs: ApiAgv[]): void {
+    const palette = ["#d97b21", "#6d8ee6", "#56b58b"];
+    agvs.filter((agv) => agv.id !== "FL-01").forEach((agv, index) => {
+      const root = new TransformNode(`companion-${agv.id}`, this.scene);
+      root.position.set(agv.x, 0, agv.z); root.rotation.y = -agv.theta - Math.PI / 2; root.parent = this.warehouseRoot ?? null;
+      const body = MeshBuilder.CreateBox(`companionBody-${agv.id}`, { width: 1.05, height: .5, depth: 1.3 }, this.scene);
+      body.position.y = .52; body.material = this.createMaterial(`companionMaterial-${agv.id}`, palette[index % palette.length]); body.parent = root;
+      const mast = MeshBuilder.CreateBox(`companionMast-${agv.id}`, { width: .62, height: 1.9, depth: .12 }, this.scene);
+      mast.position.set(0, 1.35, -.58); mast.material = this.createMetalMaterial(`companionSteel-${agv.id}`, "#657382", 64); mast.parent = root;
+      const beacon = MeshBuilder.CreateCylinder(`companionBeacon-${agv.id}`, { diameter: .16, height: .15, tessellation: 16 }, this.scene);
+      beacon.position.set(0, 1.35, .4); beacon.material = this.createMaterial(`companionBeaconMaterial-${agv.id}`, "#63e6be"); beacon.parent = root;
+      this.companionAgvs.set(agv.id, root);
+    });
+  }
+
+  private syncCompanionAgvs(agvs: ApiAgv[]): void {
+    for (const agv of agvs) {
+      const root = this.companionAgvs.get(agv.id);
+      if (!root || agv.id === "FL-01") continue;
+      root.position.x = agv.x; root.position.z = agv.z; root.rotation.y = -agv.theta - Math.PI / 2;
+    }
+  }
+
+  private createFloorLabel(station: StationDefinition, text: string, localX: number, localZ: number, width: number, height: number, color: string): void {
+    const texture = new DynamicTexture(`floorLabel-${text}`, { width: 512, height: 128 }, this.scene, true);
+    texture.hasAlpha = true;
+    texture.drawText(text, null, 84, "bold 42px Arial", color, "transparent", true, true);
+    const material = new StandardMaterial(`floorLabelMaterial-${text}`, this.scene);
+    material.diffuseTexture = texture; material.emissiveColor = new Color3(.14, .14, .14); material.useAlphaFromDiffuseTexture = true;
+    const label = MeshBuilder.CreatePlane(`floorLabel-${text}`, { width, height }, this.scene);
+    const point = this.stationPoint(station, localX, localZ);
+    label.position.set(point.x, .027, point.z); label.rotation.x = Math.PI / 2; label.rotation.y = station.rotationY + Math.PI;
+    label.material = material; label.parent = this.warehouseRoot ?? null;
+  }
+
+  private addConveyorCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean, conveyorId = "CONV-OUT-01"): void {
     if (!this.conveyorCardboardMaterial || !this.outboundStation) return;
     const root = new TransformNode(`shippingCargo-${index}`, this.scene);
-    const start = this.stationPoint(this.outboundStation, -1.75 - index * 0.15, 0);
+    const laneIndex = conveyorId.endsWith("02") ? 1 : 0;
+    const laneZ = OUTBOUND_CONVEYOR_LANES[laneIndex];
+    const start = this.stationPoint(this.outboundStation, -1.75 - index * 0.15, laneZ);
     root.position.set(start.x, 1.2, start.z);
     root.rotation.y = this.outboundStation.rotationY;
     root.parent = this.warehouseRoot ?? null;
@@ -1109,7 +1217,7 @@ export default class WarehouseScene {
     this.registerLoadHover(box, load.id);
     this.conveyorCargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
-    const end = this.stationPoint(this.outboundStation, 5.6 - index * 0.55, 0);
+    const end = this.stationPoint(this.outboundStation, 5.6 - index * 0.55, laneZ);
     const travel = new Animation(`conveyorTravel-${index}`, "position", 30, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
     travel.setKeys([{ frame: 0, value: root.position.clone() }, { frame: 180, value: new Vector3(end.x, 1.2, end.z) }]);
     this.scene.beginDirectAnimation(root, [travel], 0, 180, false);
@@ -1130,7 +1238,7 @@ export default class WarehouseScene {
       this.scene.beginDirectAnimation(item.root, [exit, scale], 0, 30, false, 1, () => item.root.dispose(false, true));
     }
     desired.forEach((load, index) => {
-      if (!this.conveyorCargoItems.some((item) => item.id === load.id)) this.addConveyorCargo(load, index, true);
+      if (!this.conveyorCargoItems.some((item) => item.id === load.id)) this.addConveyorCargo(load, index, true, `CONV-OUT-0${index % 2 + 1}`);
     });
   }
 
@@ -1383,6 +1491,11 @@ export default class WarehouseScene {
     this.poseBuffer.length = 0;
     this.wheelMeshes.length = 0;
     this.chargingIndicators.clear();
+    this.companionAgvs.clear();
+    this.robotCellRoot = undefined;
+    this.robotArm = undefined;
+    this.robotGripper = undefined;
+    this.robotCellPhase = "IDLE";
     this.lastRenderedPosition = undefined;
     this.carriedCargo = undefined;
     this.inboundCardboardMaterial = undefined;

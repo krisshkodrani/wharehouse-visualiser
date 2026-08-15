@@ -344,9 +344,17 @@ export default class MainController extends Controller {
     const occupied = new Set(snapshot.loads
       .filter((load) => ["STORED", "OUTBOUND_QUEUED"].includes(load.status))
       .map((load) => load.locationId));
-    const stations = snapshot.locations.filter((location) => ["INBOUND", "OUTBOUND", "PARKING_CHARGING"].includes(location.type));
-    const inboundStation = stations.find((station) => station.type === "INBOUND");
-    const outboundStation = stations.find((station) => station.type === "OUTBOUND");
+    const stations = snapshot.locations.filter((location) => location.type !== "STORAGE");
+    const inboundStation = stations.find((station) => ["REC-STG-01", "RECEIVING_STAGING"].includes(station.canonicalId ?? station.type))
+      ?? stations.find((station) => station.type === "INBOUND");
+    const outboundStation = stations.find((station) => ["OUT-STG-01", "OUTBOUND_STAGING"].includes(station.canonicalId ?? station.type))
+      ?? stations.find((station) => station.type === "OUTBOUND");
+    const conveyorLoads = [
+      ...snapshot.loads.filter((load) => load.status === "ON_CONVEYOR")
+        .map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
+      ...(snapshot.cartons ?? []).filter((carton) => carton.status === "ON_CONVEYOR")
+        .map((carton) => ({ id: carton.id, item: carton.sku, status: carton.status, locationId: carton.locationId }))
+    ];
     const visual: WarehouseVisualConfig = {
         id: snapshot.id,
         signText: "LINZ AI LOGISTICS",
@@ -360,7 +368,7 @@ export default class MainController extends Controller {
             return { id: load.id, item: load.item, status: load.status, locationId: load.locationId, bay: slot.bayIndex ?? 0, level: slot.levelIndex ?? 0 };
           });
           return {
-            id: rack.id, name: rack.name, position: [rack.x, 0, rack.z] as [number, number, number], rotationY: rack.rotationY, bays: rack.bays,
+            id: rack.id, canonicalId: rack.canonicalId, name: rack.name, position: [rack.x, 0, rack.z] as [number, number, number], rotationY: rack.rotationY, bays: rack.bays,
             loads,
             emptySlots: slots.length > 0
               ? slots.filter((location) => !occupied.has(location.id)).map((location) => [location.bayIndex ?? 0, location.levelIndex ?? 0] as [number, number])
@@ -373,7 +381,8 @@ export default class MainController extends Controller {
         ],
         stations: stations.map((station) => ({
           id: station.id,
-          type: station.type as "INBOUND" | "OUTBOUND" | "PARKING_CHARGING",
+          canonicalId: station.canonicalId,
+          type: station.type,
           position: [station.x, 0, station.z],
           rotationY: station.rotationY ?? 0,
           width: station.operatingWidth ?? 7,
@@ -383,11 +392,18 @@ export default class MainController extends Controller {
           id: obstacle.id, type: obstacle.type, position: [obstacle.x, 0, obstacle.z], rotationY: obstacle.rotationY,
           width: obstacle.width, depth: obstacle.depth, height: obstacle.height
         })),
+        cartons: (snapshot.cartons ?? []).map((carton) => ({
+          id: carton.id, palletId: carton.palletId, sku: carton.sku, status: carton.status, locationId: carton.locationId
+        })),
+        robotCells: (snapshot.robotCells ?? []).map((cell) => ({ id: cell.id, phase: cell.phase, activePickJobId: cell.activePickJobId })),
+        conveyorTransfers: (snapshot.conveyorTransfers ?? []).map((transfer) => ({
+          id: transfer.id, cartonId: transfer.cartonId, loadId: transfer.loadId, status: transfer.status, conveyorId: transfer.conveyorId
+        })),
+        fleetAgvs: snapshot.agvs,
         inboundCount: inbound.length,
         inboundLoads: inbound.map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
-        conveyorCount: snapshot.loads.filter((load) => load.status === "ON_CONVEYOR").length,
-        conveyorLoads: snapshot.loads.filter((load) => load.status === "ON_CONVEYOR")
-          .map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
+        conveyorCount: conveyorLoads.length,
+        conveyorLoads,
         loadDetails: snapshot.loads.map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
         carriedLoadId: agv?.carriedLoadId,
         chargingStationId: agv?.charging ? agv.currentStationId : undefined
@@ -401,6 +417,7 @@ export default class MainController extends Controller {
       loadDetails: undefined,
       carriedLoadId: undefined,
       chargingStationId: undefined,
+      fleetAgvs: undefined,
       racks: visual.racks.map(({ emptySlots: _emptySlots, ...rack }) => rack)
     });
     if (!this.sceneConfigured || signature !== this.sceneSignature) {
