@@ -66,4 +66,19 @@ class RoutePlannerTest {
 
     assertThrows(IllegalStateException.class, () -> new RoutePlanner(store).route("SOURCE", "DESTINATION"));
   }
+
+  @Test void keepsOutboundApproachClearOfSouthGuard() {
+    WarehouseStore store = mock(WarehouseStore.class);
+    when(store.nodeForLocation("SOURCE")).thenReturn("W-C");
+    when(store.nodeForLocation("DESTINATION")).thenReturn("OUTBOUND");
+    when(store.nodes()).thenReturn(List.of(
+        new WarehouseStore.NodeRow("W-C", -18, 10),
+        new WarehouseStore.NodeRow("OUTBOUND", -17, 13)));
+    when(store.edges()).thenReturn(List.of(
+        new WarehouseStore.EdgeRow("W-C-OUT", "W-C", "OUTBOUND", 3.1622776602, true)));
+    when(store.physicalObstacles()).thenReturn(List.of(
+        new WarehouseStore.PhysicalObstacle("SHIP-GUARD-S", "BARRIER", -21.15, 12, 2.25, .08, 0, .9)));
+
+    assertEquals(List.of("W-C", "OUTBOUND"), new RoutePlanner(store).route("SOURCE", "DESTINATION"));
+  }
 }
