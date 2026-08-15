@@ -26,6 +26,7 @@ class MqttGateway {
   private final WarehouseStore store;
   private final JobExecutionService execution;
   private final EventPublisher events;
+  private final WarehouseMetrics metrics;
   private final VdaSchemaValidator validator;
   private final MqttClient client;
   private final MqttConnectOptions options;
@@ -37,11 +38,11 @@ class MqttGateway {
 
   private record InboundMessage(String topic, MqttMessage message) {}
 
-  MqttGateway(ObjectMapper mapper, WarehouseStore store, JobExecutionService execution, EventPublisher events,
+  MqttGateway(ObjectMapper mapper, WarehouseStore store, JobExecutionService execution, EventPublisher events, WarehouseMetrics metrics,
       @Value("${warehouse.mqtt-url}") String url,
       @Value("${warehouse.mqtt-user}") String user,
       @Value("${warehouse.mqtt-password}") String password) throws Exception {
-    this.mapper = mapper; this.store = store; this.execution = execution; this.events = events;
+    this.mapper = mapper; this.store = store; this.execution = execution; this.events = events; this.metrics = metrics;
     this.validator = new VdaSchemaValidator(mapper);
     this.client = new MqttClient(url, "warehouse-backend", new MemoryPersistence());
     this.options = new MqttConnectOptions();
@@ -76,8 +77,10 @@ class MqttGateway {
       try {
         client.publish(row.topic(), row.payload().getBytes(StandardCharsets.UTF_8), row.qos(), false);
         store.sent(row.id());
+        metrics.outboxPublished();
       } catch (Exception exception) {
         store.failed(row.id());
+        metrics.outboxFailed();
         break;
       }
     }
@@ -134,8 +137,10 @@ class MqttGateway {
   }
 
   private void subscribeLatest(String topic, AtomicReference<InboundMessage> target) throws Exception {
-    client.subscribe(topic, 0, (receivedTopic, message) ->
-        target.set(new InboundMessage(receivedTopic, new MqttMessage(message.getPayload().clone()))));
+    client.subscribe(topic, 0, (receivedTopic, message) -> {
+      InboundMessage previous = target.getAndSet(new InboundMessage(receivedTopic, new MqttMessage(message.getPayload().clone())));
+      if (previous != null) metrics.telemetryCoalesced(receivedTopic);
+    });
   }
 
   @Scheduled(fixedDelay = 50, initialDelay = 1000)
@@ -157,6 +162,7 @@ class MqttGateway {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("state", json);
       Vda5050.State state = mapper.readValue(json, Vda5050.State.class);
+      metrics.mqttAccepted(topic);
       if (state.powerSupply() != null) store.updatePower(state.powerSupply().stateOfCharge(), state.powerSupply().charging());
       UUID jobId = uuid(state.orderId());
       if (jobId != null) {
@@ -178,6 +184,7 @@ class MqttGateway {
       liveAgv.set(agv);
       events.publish("AGV_UPDATED", agv);
     } catch (Exception exception) {
+      metrics.mqttRejected(topic);
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
     }
   }
@@ -187,6 +194,7 @@ class MqttGateway {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("visualization", json);
       Vda5050.Visualization telemetry = mapper.readValue(json, Vda5050.Visualization.class);
+      metrics.mqttAccepted(topic);
       Vda5050.Position position = telemetry.mobileRobotPosition();
       double speed = telemetry.velocity() == null ? 0 : Math.hypot(telemetry.velocity().vx(), telemetry.velocity().vy());
       var current = liveAgv.get();
@@ -200,6 +208,7 @@ class MqttGateway {
       events.publish("AGV_POSE", updated);
       if (current.velocity() > 0.01 && speed <= 0.01 && current.taskId() == null) execution.agvIdle();
     } catch (Exception exception) {
+      metrics.mqttRejected(topic);
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
     }
   }
@@ -208,6 +217,7 @@ class MqttGateway {
   private void onHandling(String topic, MqttMessage message) {
     try {
       Map<String, Object> value = mapper.readValue(message.getPayload(), Map.class);
+      metrics.mqttAccepted(topic);
       String phase = String.valueOf(value.getOrDefault("phase", "IDLE"));
       double forkHeight = ((Number) value.getOrDefault("forkHeight", 0)).doubleValue();
       double forkExtension = ((Number) value.getOrDefault("forkExtension", 0)).doubleValue();
@@ -219,6 +229,7 @@ class MqttGateway {
       events.publish("AGV_HANDLING_UPDATED", agv);
       if ("CHARGING".equals(phase) || "PARKED".equals(phase)) execution.agvIdle();
     } catch (Exception exception) {
+      metrics.mqttRejected(topic);
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
     }
   }
@@ -234,9 +245,11 @@ class MqttGateway {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("connection", json);
       Vda5050.Connection connection = mapper.readValue(json, Vda5050.Connection.class);
+      metrics.mqttAccepted(topic);
       events.publish("AGV_CONNECTION_UPDATED", connection);
       if ("ONLINE".equals(connection.connectionState())) publishControl("SYNC", store.runtime());
     } catch (Exception exception) {
+      metrics.mqttRejected(topic);
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
     }
   }

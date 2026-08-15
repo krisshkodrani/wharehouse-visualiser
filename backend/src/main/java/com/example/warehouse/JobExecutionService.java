@@ -9,15 +9,17 @@ class JobExecutionService {
   private final WarehouseStore store;
   private final DispatchService dispatch;
   private final EventPublisher events;
+  private final WarehouseMetrics metrics;
 
-  JobExecutionService(WarehouseStore store, DispatchService dispatch, EventPublisher events) {
-    this.store = store; this.dispatch = dispatch; this.events = events;
+  JobExecutionService(WarehouseStore store, DispatchService dispatch, EventPublisher events, WarehouseMetrics metrics) {
+    this.store = store; this.dispatch = dispatch; this.events = events; this.metrics = metrics;
   }
 
   @Transactional
   public void executing(UUID jobId) {
     store.job(jobId).ifPresent(job -> {
       store.markExecuting(jobId);
+      metrics.taskTransition("EXECUTING");
       events.publish("TRANSPORT_TASK_UPDATED", new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(), job.source(), job.destination(), "EXECUTING", job.route()));
     });
   }
@@ -37,6 +39,7 @@ class JobExecutionService {
       if (!job.route().isEmpty() && job.route().getLast().equals(lastNodeId) && !"COMPLETED".equals(job.status())) {
         store.complete(job);
         store.finishDispatch(jobId);
+        metrics.taskTransition("COMPLETED");
         events.publish("TRANSPORT_TASK_UPDATED", new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(), job.source(), job.destination(), "COMPLETED", job.route()));
         events.publish("INVENTORY_UPDATED", store.snapshot());
       }
@@ -51,6 +54,7 @@ class JobExecutionService {
   @Transactional
   void cancelled(UUID taskId) {
     store.completeCancellation(taskId);
+    metrics.taskTransition("CANCELLED");
     events.publish("TRANSPORT_TASK_CANCELLED", store.snapshot());
   }
 }
