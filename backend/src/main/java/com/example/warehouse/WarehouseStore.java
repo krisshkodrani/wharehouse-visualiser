@@ -437,6 +437,7 @@ class WarehouseStore {
   }
 
   ApiModels.RuntimeView reset() {
+    jdbc.update("delete from api_idempotency_key");
     jdbc.update("delete from mqtt_outbox");
     jdbc.update("delete from vda_dispatch");
     jdbc.update("update agv set task_id=null,status='CHARGING',x=11,z=-6,theta=0,velocity=0,battery=82,charging=true,current_station_id='PARK-01',handling_phase='CHARGING',fork_height=0,fork_extension=0,carried_load_id=null where id='FL-01'");
