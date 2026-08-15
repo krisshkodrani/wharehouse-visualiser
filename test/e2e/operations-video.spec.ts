@@ -37,9 +37,17 @@ test("records one complete putaway and outbound transfer", async ({ page, reques
   await expect(page.locator("canvas.warehouseCanvas")).toBeVisible();
   await page.waitForTimeout(1500);
 
+  const received = await request.post("/api/v1/warehouses/linz/inbound-loads", {
+    data: { sku: "E2E-MOTION-PALLET", quantity: 1 }
+  });
+  expect(received.ok()).toBeTruthy();
+  const receivedBody = await received.json() as { loads: LoadState[] };
+  const loadId = receivedBody.loads[0]?.id;
+  expect(loadId).toBeTruthy();
+
   const accepted = await request.post("/api/v1/warehouses/linz/putaway-requests", {
     data: {
-      inboundLoadIds: ["PALLET-A-001"],
+      inboundLoadIds: [loadId],
       operatorPrompt: "Store this pallet in the nearest eligible storage slot."
     }
   });
@@ -48,31 +56,31 @@ test("records one complete putaway and outbound transfer", async ({ page, reques
   await expect.poll(async () => {
     const response = await request.get("/api/v1/warehouses/linz/snapshot");
     const snapshot = await response.json() as Snapshot;
-    return snapshot.jobs.find((job) => job.loadId === "PALLET-A-001")?.status;
+    return snapshot.jobs.find((job) => job.loadId === loadId)?.status;
   }, { timeout: 60_000 }).toMatch(/EXECUTING|COMPLETED/);
 
   await expect.poll(async () => {
     const response = await request.get("/api/v1/warehouses/linz/snapshot");
     const snapshot = await response.json() as Snapshot;
-    return snapshot.loads.find((load) => load.id === "PALLET-A-001")?.status;
+    return snapshot.loads.find((load) => load.id === loadId)?.status;
   }, { timeout: 90_000, intervals: [500] }).toBe("STORED");
   await page.waitForTimeout(1800);
 
   const outbound = await request.post("/api/v1/warehouses/linz/outbound-requests", {
-    data: { loadIds: ["PALLET-A-001"] }
+    data: { loadIds: [loadId] }
   });
   expect(outbound.ok()).toBeTruthy();
 
   await expect.poll(async () => {
     const response = await request.get("/api/v1/warehouses/linz/snapshot");
     const snapshot = await response.json() as Snapshot;
-    return snapshot.loads.find((load) => load.id === "PALLET-A-001")?.status;
+    return snapshot.loads.find((load) => load.id === loadId)?.status;
   }, { timeout: 180_000, intervals: [250] }).toBe("ON_CONVEYOR");
 
   await expect.poll(async () => {
     const response = await request.get("/api/v1/warehouses/linz/snapshot");
     const snapshot = await response.json() as Snapshot;
-    return snapshot.loads.find((load) => load.id === "PALLET-A-001")?.status;
+    return snapshot.loads.find((load) => load.id === loadId)?.status;
   }, { timeout: 30_000, intervals: [500] }).toBe("SHIPPED");
   await page.waitForTimeout(1200);
 

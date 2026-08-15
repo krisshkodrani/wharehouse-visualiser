@@ -10,6 +10,7 @@ import WarehouseViewport from "../control/WarehouseViewport";
 import WarehouseApi from "../model/WarehouseApi";
 import type { ApiAgv, ApiTransportOrder, WarehouseEvent, WarehouseModelData, WarehouseSnapshot, WarehouseVisualConfig } from "../model/types";
 import { projectVisualConfig } from "../model/warehouseState";
+import { mergeAgvEvent } from "../model/agvState";
 
 /** @namespace warehouse.visualizer.controller */
 export default class MainController extends Controller {
@@ -234,9 +235,13 @@ export default class MainController extends Controller {
   }
 
   private applySnapshot(snapshot: WarehouseSnapshot): void {
+    const shouldResetPose = !this.sceneConfigured || snapshot.runtime.simulationEpoch !== this.simulationEpoch;
     this.trackAnimationState(snapshot);
     const model = this.model();
-    const agv = snapshot.agvs[0];
+    const snapshotAgv = snapshot.agvs[0];
+    const agv = snapshotAgv
+      ? mergeAgvEvent(model.getProperty("/agv") as ApiAgv | undefined, snapshotAgv, shouldResetPose)
+      : undefined;
     this.simulationEpoch = snapshot.runtime.simulationEpoch;
     const inbound = snapshot.loads.filter((load) => load.status === "INBOUND");
     model.setProperty("/warehouseName", snapshot.name);
@@ -334,7 +339,10 @@ export default class MainController extends Controller {
     } else {
       this.viewport()?.updateOperations(visual);
     }
-    if (agv) this.applyAgv(agv);
+    if (agv) {
+      if (shouldResetPose) this.applyAgv(agv);
+      else this.applyAgvOperations(agv);
+    }
     if (!snapshot.scenario.configured) window.setTimeout(() => this.seedDialog()?.open(), 0);
   }
 
@@ -342,9 +350,12 @@ export default class MainController extends Controller {
     if (this.model().getProperty("/mode") === "SANDBOX") return;
     if (event.simulationEpoch < this.simulationEpoch) return;
     if (event.type === "AGV_POSE" || event.type === "AGV_UPDATED" || event.type === "AGV_HANDLING_UPDATED") {
-      const agv = event.payload as ApiAgv;
+      const carriesLivePose = event.type === "AGV_POSE";
+      const current = this.model().getProperty("/agv") as ApiAgv | undefined;
+      const agv = mergeAgvEvent(current, event.payload as ApiAgv, carriesLivePose);
       this.model().setProperty("/agv", agv);
-      this.applyAgv(agv);
+      if (carriesLivePose) this.applyAgv(agv);
+      else this.applyAgvOperations(agv);
       this.model().setProperty("/activityText", this.activityText(undefined, agv));
       return;
     }
@@ -367,6 +378,10 @@ export default class MainController extends Controller {
 
   private applyAgv(agv: ApiAgv): void {
     if (this.model().getProperty("/mode") !== "SANDBOX") this.viewport()?.setAgvState(agv);
+  }
+
+  private applyAgvOperations(agv: ApiAgv): void {
+    if (this.model().getProperty("/mode") !== "SANDBOX") this.viewport()?.setAgvOperations(agv);
   }
 
   private trackAnimationState(snapshot: WarehouseSnapshot): void {

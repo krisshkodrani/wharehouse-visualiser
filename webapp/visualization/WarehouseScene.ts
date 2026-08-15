@@ -220,14 +220,11 @@ export default class WarehouseScene {
 
   public setAgvState(agv: ApiAgv): void {
     if (this.sandboxMode) return;
-    this.syncCarriedCargo(agv.carriedLoadId);
-    this.updateChargingIndicators(agv.charging ? agv.currentStationId : undefined);
+    this.setAgvOperations(agv);
     const sample = { receivedAt: performance.now(), x: agv.x, z: agv.z, theta: -agv.theta - Math.PI / 2, velocity: agv.velocity ?? 0 };
     const previous = this.poseBuffer.at(-1);
     if (!previous || previous.x !== sample.x || previous.z !== sample.z || previous.theta !== sample.theta) this.poseBuffer.push(sample);
     while (this.poseBuffer.length > 40) this.poseBuffer.shift();
-    if (this.forkliftLift) this.forkliftLift.position.y = Math.max(0, Math.min(MAX_FORK_HEIGHT, agv.forkHeight ?? 0));
-    if (this.forkliftForkAssembly) this.forkliftForkAssembly.position.z = -Math.max(0, Math.min(.7, agv.forkExtension ?? 0));
     const now = performance.now();
     if (now - this.lastPoseTelemetryAt >= 1000) {
       this.lastPoseTelemetryAt = now;
@@ -236,6 +233,14 @@ export default class WarehouseScene {
         renderedX: Number((this.forklift?.position.x ?? agv.x).toFixed(2)), renderedZ: Number((this.forklift?.position.z ?? agv.z).toFixed(2))
       });
     }
+  }
+
+  public setAgvOperations(agv: ApiAgv): void {
+    if (this.sandboxMode) return;
+    this.syncCarriedCargo(agv.carriedLoadId);
+    this.updateChargingIndicators(agv.charging ? agv.currentStationId : undefined);
+    if (this.forkliftLift) this.forkliftLift.position.y = Math.max(0, Math.min(MAX_FORK_HEIGHT, agv.forkHeight ?? 0));
+    if (this.forkliftForkAssembly) this.forkliftForkAssembly.position.z = -Math.max(0, Math.min(.7, agv.forkExtension ?? 0));
   }
 
   public setSandboxMode(enabled: boolean): void {
