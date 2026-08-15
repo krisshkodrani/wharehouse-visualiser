@@ -9,7 +9,7 @@ COPY backend/src backend/src
 RUN mvn -B -pl backend -am package -DskipTests
 RUN cp "$(find /workspace/backend/target -maxdepth 1 -name 'warehouse-backend-*.jar' ! -name '*.original' -print -quit)" /workspace/backend/target/app.jar
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 COPY --from=build /workspace/backend/target/app.jar app.jar
 EXPOSE 8080
