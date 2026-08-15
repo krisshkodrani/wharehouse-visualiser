@@ -39,6 +39,7 @@ class AgvSimulator {
   private final double dockingSpeed;
   private final double acceleration;
   private final double braking;
+  private final double batteryConsumptionPerMetre;
   private final ExecutorService executor = Executors.newSingleThreadExecutor(Thread.ofPlatform().name("agv-motion").factory());
   private final ExecutorService mqttCallbacks = Executors.newSingleThreadExecutor(Thread.ofPlatform().name("agv-mqtt-callback").factory());
   private final ScheduledExecutorService charger = Executors.newSingleThreadScheduledExecutor(Thread.ofPlatform().name("agv-charger").factory());
@@ -78,9 +79,12 @@ class AgvSimulator {
       @Value("${warehouse.loaded-speed:1.8}") double loadedSpeed,
       @Value("${warehouse.docking-speed:0.7}") double dockingSpeed,
       @Value("${warehouse.acceleration:1.0}") double acceleration,
-      @Value("${warehouse.braking:1.5}") double braking) throws Exception {
+      @Value("${warehouse.braking:1.5}") double braking,
+      @Value("${warehouse.battery-consumption-per-metre:0.015}") double batteryConsumptionPerMetre) throws Exception {
     this.mapper = mapper; this.validator = new VdaSchemaValidator(mapper); this.emptySpeed = emptySpeed;
     this.loadedSpeed = loadedSpeed; this.dockingSpeed = dockingSpeed; this.acceleration = acceleration; this.braking = braking;
+    BatteryModel.consume(100, 0, batteryConsumptionPerMetre);
+    this.batteryConsumptionPerMetre = batteryConsumptionPerMetre;
     this.client = new MqttClient(url, "agv-FL-01", new MemoryPersistence());
     this.options = new MqttConnectOptions();
     options.setCleanSession(true);
@@ -257,7 +261,7 @@ class AgvSimulator {
       double progress = travelled / distance;
       position = new Vda5050.Position(startX + (endX - startX) * progress, startY + (endY - startY) * progress, theta, "linz", true);
       velocity = currentSpeed;
-      battery = Math.max(0, battery - step * .08);
+      battery = BatteryModel.consume(battery, step, batteryConsumptionPerMetre);
       publishVisualization(currentSpeed);
       controlledSleep(50, epoch);
     }

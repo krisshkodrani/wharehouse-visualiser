@@ -71,6 +71,7 @@ services:
       AGV_DOCKING_SPEED: ${AGV_DOCKING_SPEED:-0.7}
       AGV_ACCELERATION: ${AGV_ACCELERATION:-1.0}
       AGV_BRAKING: ${AGV_BRAKING:-1.5}
+      AGV_BATTERY_CONSUMPTION_PER_METRE: ${AGV_BATTERY_CONSUMPTION_PER_METRE:-0.015}
     depends_on:
       mosquitto: { condition: service_healthy }
       backend: { condition: service_healthy }

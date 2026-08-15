@@ -98,7 +98,10 @@ class MqttGateway {
       control.put("x", reset ? home.x() : agv.x());
       control.put("z", reset ? home.z() : agv.z());
       control.put("theta", reset ? 0 : agv.theta());
-      control.put("battery", reset ? 82 : agv.battery());
+      // The store has already applied either the reset baseline or the selected
+      // scenario preset. Keep it authoritative instead of overriding presets
+      // with a transport-layer demo constant.
+      control.put("battery", agv.battery());
       control.put("timeScale", runtime.timeScale());
       control.put("charging", reset || agv.charging());
       control.put("handlingPhase", reset ? "CHARGING" : agv.handlingPhase());
