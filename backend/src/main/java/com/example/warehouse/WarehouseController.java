@@ -4,6 +4,7 @@ import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -16,9 +17,10 @@ class WarehouseController {
   private final WarehouseStore store;
   private final PlanningService planning;
   private final OperationsService operations;
+  private final IdempotencyService idempotency;
 
-  WarehouseController(WarehouseStore store, PlanningService planning, OperationsService operations) {
-    this.store = store; this.planning = planning; this.operations = operations;
+  WarehouseController(WarehouseStore store, PlanningService planning, OperationsService operations, IdempotencyService idempotency) {
+    this.store = store; this.planning = planning; this.operations = operations; this.idempotency = idempotency;
   }
 
   @GetMapping("/warehouses/linz/snapshot")
@@ -62,14 +64,21 @@ class WarehouseController {
   }
 
   @PostMapping("/warehouses/linz/transport-orders")
-  ResponseEntity<ApiModels.TransportOrderView> createTransportOrder(@Valid @RequestBody ApiModels.TransportOrderRequest request) {
+  ResponseEntity<ApiModels.TransportOrderView> createTransportOrder(
+      @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+      @Valid @RequestBody ApiModels.TransportOrderRequest request) {
+    ApiModels.TransportOrderView order = idempotency.createTransportOrder(idempotencyKey, request, () -> createTransportOrder(request));
+    return ResponseEntity.accepted().body(order);
+  }
+
+  private ApiModels.TransportOrderView createTransportOrder(ApiModels.TransportOrderRequest request) {
     String type = request.type().trim().toUpperCase(java.util.Locale.ROOT);
     String priority = request.priority().trim().toUpperCase(java.util.Locale.ROOT);
     if (!java.util.Set.of("PUTAWAY", "OUTBOUND").contains(type)) throw new IllegalArgumentException("Type must be PUTAWAY or OUTBOUND");
     if (!java.util.Set.of("NORMAL", "HIGH", "URGENT").contains(priority)) throw new IllegalArgumentException("Priority must be NORMAL, HIGH, or URGENT");
-    if ("OUTBOUND".equals(type)) return ResponseEntity.status(201).body(operations.outbound(request));
+    if ("OUTBOUND".equals(type)) return operations.outbound(request);
     ApiModels.PutawayAccepted accepted = planning.submit(request.loadIds(), priority, request.objective());
-    return ResponseEntity.accepted().body(store.transportOrder(accepted.requestId()).orElseThrow());
+    return store.transportOrder(accepted.requestId()).orElseThrow();
   }
 
   @PostMapping("/warehouses/linz/transport-orders/{id}/cancel")
