@@ -1,6 +1,7 @@
 import UIComponent from "sap/ui/core/UIComponent";
 import JSONModel from "sap/ui/model/json/JSONModel";
 import { warehouseModelData } from "./model/warehouseData";
+import { emptyOrderInspection } from "./model/orderInspection";
 
 /** @namespace warehouse.visualizer */
 export default class Component extends UIComponent {
@@ -31,6 +32,11 @@ export default class Component extends UIComponent {
       selectedOrderTasks: [],
       selectedVdaDispatches: [],
       selectedVdaPayload: "No VDA order has been published yet.",
+      inspection: emptyOrderInspection(),
+      activityFilter: "ALL",
+      visibleInspectionActivity: [],
+      vdaViewMode: "STRUCTURED",
+      selectedVdaSequence: null,
       scenario: { configured: false },
       scenarioPresets: [],
       orderType: "PUTAWAY",

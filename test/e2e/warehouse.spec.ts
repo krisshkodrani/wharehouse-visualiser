@@ -54,10 +54,19 @@ test("renders the seeded VDA 5050 control tower and unified order workflow", asy
     expect(canvasBox?.height).toBeGreaterThan(300);
 
     await page.getByText("TO-AAAAAAAA", { exact: true }).first().click();
-    await page.getByRole("button", { name: "More" }).click();
-    await page.locator(".sapMITBSelectItem").filter({ hasText: "VDA 5050" }).click();
+    await expect(page.getByRole("heading", { name: "Execution journey", exact: true })).toBeVisible();
+    await expect(page.getByText("VDA 5050 exchange", { exact: true })).toBeVisible();
+    await expect(page.getByText("Planned route", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Inspect VDA 5050" }).click();
+    const vdaWorkbench = page.getByRole("dialog", { name: /VDA 5050 workbench/ });
+    await expect(vdaWorkbench).toBeVisible();
     await expect(page.getByText("VDA 5050 v3.0.0", { exact: true })).toBeVisible();
-    await expect(page.getByText("Order update 0", { exact: true })).toBeVisible();
+    await expect(vdaWorkbench.getByRole("heading", { name: "Update 0", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Executable sequence", exact: true })).toBeVisible();
+    await vdaWorkbench.getByRole("option", { name: "Raw JSON" }).click();
+    await expect(vdaWorkbench.locator(".vdaCodeEditor")).toBeVisible();
+    await vdaWorkbench.getByRole("button", { name: "Close inspector" }).click();
 
     await page.getByRole("button", { name: "New transport order" }).click();
     const orderDialog = page.getByRole("dialog", { name: "New transport order" });

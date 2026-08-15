@@ -11,6 +11,8 @@ import WarehouseApi from "../model/WarehouseApi";
 import type { ApiAgv, ApiTransportOrder, WarehouseEvent, WarehouseModelData, WarehouseSnapshot, WarehouseVisualConfig } from "../model/types";
 import { projectVisualConfig } from "../model/warehouseState";
 import { mergeAgvEvent } from "../model/agvState";
+import { buildOrderInspection, filterInspectionActivity } from "../model/orderInspection";
+import type { InspectionActivityFilter, OrderInspection, TaskInspection, VdaNavigatorItem, VdaSequenceRow } from "../model/orderInspection";
 
 /** @namespace warehouse.visualizer.controller */
 export default class MainController extends Controller {
@@ -169,6 +171,70 @@ export default class MainController extends Controller {
     const parameters = event.getParameters() as { listItem?: { getBindingContext: (name: string) => { getObject: () => ApiTransportOrder } | null } };
     const order = parameters.listItem?.getBindingContext("warehouse")?.getObject();
     if (order) this.selectOrder(order);
+  }
+
+  public onTaskPress(event: Event): void {
+    const task = this.bindingObject<TaskInspection>(event, "listItem");
+    if (task) this.updateInspection(task.id, undefined, true);
+  }
+
+  public onInspectTaskVda(event: Event): void {
+    const task = this.bindingObject<TaskInspection>(event, "source");
+    if (!task) return;
+    this.updateInspection(task.id, undefined, true);
+    this.openVdaInspector();
+  }
+
+  public onOpenVdaInspector(): void {
+    const inspection = this.model().getProperty("/inspection") as OrderInspection;
+    if (!inspection.selectedTaskId && inspection.tasks[0]) this.updateInspection(inspection.tasks[0].id, undefined, true);
+    this.openVdaInspector();
+  }
+
+  public onCloseVdaInspector(): void { (this.byId("vdaInspectorDialog") as Dialog | undefined)?.close(); }
+
+  public onVdaNavigatorPress(event: Event): void {
+    const item = this.bindingObject<VdaNavigatorItem>(event, "listItem");
+    if (item?.kind === "DISPATCH" && item.dispatchId) this.updateInspection(item.taskId, item.dispatchId, false);
+  }
+
+  public onJumpToLatestVda(): void {
+    const inspection = this.model().getProperty("/inspection") as OrderInspection;
+    this.updateInspection(inspection.selectedTaskId, undefined, true);
+  }
+
+  public onVdaSequencePress(event: Event): void {
+    const row = this.bindingObject<VdaSequenceRow>(event, "listItem");
+    if (row) this.model().setProperty("/selectedVdaSequence", row);
+  }
+
+  public onVdaViewModeChange(event: Event): void {
+    this.model().setProperty("/vdaViewMode", (event.getSource() as SegmentedButton).getSelectedKey());
+  }
+
+  public onActivityFilterChange(event: Event): void {
+    const filter = (event.getSource() as SegmentedButton).getSelectedKey() as InspectionActivityFilter;
+    const inspection = this.model().getProperty("/inspection") as OrderInspection;
+    this.model().setProperty("/activityFilter", filter);
+    this.model().setProperty("/visibleInspectionActivity", filterInspectionActivity(inspection.activity, filter));
+  }
+
+  public async onCopyVdaJson(): Promise<void> {
+    const raw = (this.model().getProperty("/inspection/selectedDispatch/rawJson") as string | undefined) ?? "";
+    if (!raw) return;
+    try { await navigator.clipboard.writeText(raw); MessageToast.show("VDA payload copied to clipboard."); }
+    catch { MessageBox.error("The browser did not allow clipboard access."); }
+  }
+
+  public onDownloadVdaJson(): void {
+    const inspection = this.model().getProperty("/inspection") as OrderInspection;
+    const dispatch = inspection.selectedDispatch;
+    if (!dispatch) return;
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([dispatch.rawJson], { type: "application/json" }));
+    link.download = `vda-order-${dispatch.orderId}-update-${dispatch.orderUpdateId}.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
   }
 
   public async onCancelSelectedOrder(): Promise<void> {
@@ -420,12 +486,40 @@ export default class MainController extends Controller {
 
   private selectOrder(order: ApiTransportOrder | null): void {
     const model = this.model();
+    const previous = model.getProperty("/inspection") as OrderInspection | undefined;
+    const preserveSelection = Boolean(order && previous?.orderId === order.id);
+    const inspection = buildOrderInspection(order,
+      preserveSelection ? previous?.selectedTaskId : undefined,
+      preserveSelection ? previous?.selectedDispatchId : undefined,
+      preserveSelection ? previous?.followLatest : true);
     model.setProperty("/selectedOrder", order);
-    model.setProperty("/selectedOrderTasks", order?.tasks ?? []);
+    model.setProperty("/selectedOrderTasks", inspection.tasks);
     model.setProperty("/selectedVdaDispatches", order?.vdaDispatches ?? []);
-    model.setProperty("/selectedVdaPayload", order?.vdaDispatches[0]?.payload
-      ? JSON.stringify(JSON.parse(order.vdaDispatches[0].payload), null, 2)
-      : "No VDA order has been published yet.");
+    model.setProperty("/inspection", inspection);
+    model.setProperty("/selectedVdaPayload", inspection.selectedDispatch?.rawJson ?? "No VDA order has been published yet.");
+    model.setProperty("/selectedVdaSequence", inspection.selectedDispatch?.sequence[0] ?? null);
+    const filter = model.getProperty("/activityFilter") as InspectionActivityFilter;
+    model.setProperty("/visibleInspectionActivity", filterInspectionActivity(inspection.activity, filter));
+  }
+
+  private updateInspection(taskId?: string, dispatchId?: string, followLatest = true): void {
+    const model = this.model();
+    const order = model.getProperty("/selectedOrder") as ApiTransportOrder | null;
+    const inspection = buildOrderInspection(order, taskId, dispatchId, followLatest);
+    model.setProperty("/inspection", inspection);
+    model.setProperty("/selectedOrderTasks", inspection.tasks);
+    model.setProperty("/selectedVdaPayload", inspection.selectedDispatch?.rawJson ?? "No VDA order has been published yet.");
+    model.setProperty("/selectedVdaSequence", inspection.selectedDispatch?.sequence[0] ?? null);
+    const filter = model.getProperty("/activityFilter") as InspectionActivityFilter;
+    model.setProperty("/visibleInspectionActivity", filterInspectionActivity(inspection.activity, filter));
+  }
+
+  private openVdaInspector(): void { (this.byId("vdaInspectorDialog") as Dialog | undefined)?.open(); }
+
+  private bindingObject<T>(event: Event, parameter: "listItem" | "source"): T | undefined {
+    const source = parameter === "source" ? event.getSource() : (event.getParameters() as { listItem?: unknown }).listItem;
+    const control = source as { getBindingContext?: (name: string) => { getObject: () => T } | null } | undefined;
+    return control?.getBindingContext?.("warehouse")?.getObject();
   }
 
   private updateEligibleLoads(): void {
