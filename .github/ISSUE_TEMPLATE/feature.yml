@@ -1,0 +1,14 @@
+name: Product proposal
+description: Propose an outcome rather than only a solution
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: User and problem }
+    validations: { required: true }
+  - type: textarea
+    id: outcome
+    attributes: { label: Desired outcome and measure }
+    validations: { required: true }
+  - type: textarea
+    id: constraints
+    attributes: { label: Constraints and trade-offs }
