@@ -1,7 +1,7 @@
 import Control from "sap/ui/core/Control";
 import RenderManager from "sap/ui/core/RenderManager";
 import WarehouseScene from "../visualization/WarehouseScene";
-import type { WarehouseVisualConfig } from "../model/types";
+import type { ApiAgv, WarehouseVisualConfig } from "../model/types";
 
 /** @namespace warehouse.visualizer.control */
 export default class WarehouseViewport extends Control {
@@ -67,8 +67,8 @@ export default class WarehouseViewport extends Control {
     this.sceneController?.moveForklift();
   }
 
-  public setAgvPose(x: number, z: number, theta: number): void {
-    this.sceneController?.setAgvPose(x, z, theta);
+  public setAgvState(agv: ApiAgv): void {
+    this.sceneController?.setAgvState(agv);
   }
 
   public setSandboxMode(enabled: boolean): void {

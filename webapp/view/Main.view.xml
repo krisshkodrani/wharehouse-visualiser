@@ -1,86 +1,192 @@
 <mvc:View controllerName="warehouse.visualizer.controller.Main" displayBlock="true"
-  xmlns="sap.m" xmlns:core="sap.ui.core" xmlns:l="sap.ui.layout" xmlns:mvc="sap.ui.core.mvc" xmlns:warehouse="warehouse.visualizer.control">
-  <Page showHeader="false" enableScrolling="false" class="warehousePage">
-    <l:Splitter orientation="Horizontal" height="100%" width="100%">
-      <VBox class="warehousePanel" renderType="Bare">
-        <layoutData><l:SplitterLayoutData size="23rem" minSize="336" resizable="true" /></layoutData>
-        <VBox class="warehousePanelHeader">
-          <Title text="{i18n>appTitle}" level="H1" />
-          <Text text="{warehouse>/warehouseName}" />
-          <HBox justifyContent="SpaceBetween" alignItems="Center" class="connectionRow">
-            <ObjectStatus title="{i18n>backend}" text="{warehouse>/connectionStatus}" state="{= ${warehouse>/connectionStatus} === 'CONNECTED' ? 'Success' : 'Warning' }" />
-            <SegmentedButton id="modeSelector" selectedKey="{warehouse>/mode}" selectionChange=".onModeChange">
-              <items><SegmentedButtonItem key="LIVE" text="{i18n>live}" /><SegmentedButtonItem key="SANDBOX" text="{i18n>sandbox}" /></items>
-            </SegmentedButton>
-          </HBox>
-          <HBox class="operationButtons" wrap="Wrap">
-            <Button text="{= ${warehouse>/operationState} === 'PAUSED' ? ${i18n>resumeOperations} : ${i18n>stopOperations} }"
-              icon="{= ${warehouse>/operationState} === 'PAUSED' ? 'sap-icon://media-play' : 'sap-icon://media-pause' }" press=".onToggleOperations" />
-            <Button text="{i18n>resetSimulation}" icon="sap-icon://refresh" type="Negative" press=".onResetSimulation" />
-          </HBox>
+  xmlns="sap.m" xmlns:core="sap.ui.core" xmlns:mvc="sap.ui.core.mvc" xmlns:warehouse="warehouse.visualizer.control">
+  <Page showHeader="false" enableScrolling="false" class="warehousePage controlTowerPage">
+    <VBox height="100%" renderType="Bare">
+      <OverflowToolbar class="controlTowerHeader">
+        <Avatar displayShape="Square" initials="W" backgroundColor="Accent6" />
+        <VBox class="towerBrand">
+          <Title text="Warehouse Control Tower" level="H1" />
+          <Text text="{= ${warehouse>/warehouseName} + ' · ' + (${warehouse>/scenario/name} || 'Choose scenario') }" />
         </VBox>
-        <VBox class="warehouseDetails" renderType="Bare">
-          <Panel headerText="{i18n>inboundStaging}" expandable="true" expanded="true" visible="{= ${warehouse>/mode} === 'LIVE' }">
-            <VBox class="workflowBox">
-              <Label text="{i18n>sku}" labelFor="receiveSku" />
-              <Input id="receiveSku" value="{warehouse>/receiveSku}" />
-              <Label text="{i18n>quantity}" labelFor="receiveQuantity" />
-              <StepInput id="receiveQuantity" value="{warehouse>/receiveQuantity}" min="1" max="50" step="1" width="100%" />
-              <Button text="{i18n>receiveBoxes}" icon="sap-icon://add-product" type="Emphasized" press=".onReceive"
-                enabled="{= ${warehouse>/operationState} === 'RUNNING' }" />
-            </VBox>
-          </Panel>
-          <Panel headerText="{i18n>putaway}" expandable="true" expanded="true" visible="{= ${warehouse>/mode} === 'LIVE' }">
-            <VBox class="workflowBox">
-              <Label text="{i18n>incomingPallets}" labelFor="inboundLoads" />
-              <MultiComboBox id="inboundLoads" width="100%" items="{warehouse>/inboundLoads}">
-                <core:Item key="{warehouse>id}" text="{= ${warehouse>id} + ' / ' + ${warehouse>item} }" />
-              </MultiComboBox>
-              <Label text="{i18n>operatorPrompt}" labelFor="operatorPrompt" />
-              <TextArea id="operatorPrompt" value="{warehouse>/operatorPrompt}" rows="3" width="100%" />
-              <Button text="{i18n>storePallets}" icon="sap-icon://ai" type="Emphasized" press=".onPutaway" enabled="{= ${warehouse>/planningStatus} !== 'PLANNING' &amp;&amp; ${warehouse>/operationState} === 'RUNNING' }" />
-              <ObjectStatus title="{i18n>planning}" text="{warehouse>/planningMessage}" state="{= ${warehouse>/planningStatus} === 'REJECTED' ? 'Error' : ${warehouse>/planningStatus} === 'VALIDATED' ? 'Success' : 'Information' }" />
-            </VBox>
-          </Panel>
-          <Panel headerText="{i18n>outboundShipping}" expandable="true" expanded="true" visible="{= ${warehouse>/mode} === 'LIVE' }">
-            <VBox class="workflowBox">
-              <Label text="{i18n>storedBoxes}" labelFor="outboundLoads" />
-              <MultiComboBox id="outboundLoads" width="100%" items="{warehouse>/storedLoads}">
-                <core:Item key="{warehouse>id}" text="{= ${warehouse>id} + ' / ' + ${warehouse>item} + ' / ' + ${warehouse>locationId} }" />
-              </MultiComboBox>
-              <Button text="{i18n>shipSelected}" icon="sap-icon://shipping-status" type="Emphasized" press=".onOutbound"
-                enabled="{= ${warehouse>/operationState} === 'RUNNING' }" />
-            </VBox>
-          </Panel>
-          <Panel headerText="{i18n>agvStatus}" expandable="true" expanded="true">
-            <VBox class="statusGrid">
-              <ObjectStatus title="Vehicle" text="{warehouse>/agv/id}" icon="sap-icon://shipping-status" />
-              <ObjectStatus title="Status" text="{warehouse>/agv/status}" state="{= ${warehouse>/agv/status} === 'MOVING' ? 'Information' : 'Success' }" />
-              <ProgressIndicator percentValue="{warehouse>/agv/battery}" displayValue="{= ${warehouse>/agv/battery} + '%' }" state="Success" />
-              <Text text="{= 'X ' + ${warehouse>/agv/x} + ' / Z ' + ${warehouse>/agv/z} }" />
-            </VBox>
-          </Panel>
-          <Panel headerText="{i18n>jobs}" expandable="true" expanded="true">
-            <List items="{warehouse>/jobs}" noDataText="{i18n>noJobs}">
-              <ObjectListItem title="{warehouse>loadId}" number="{warehouse>sequence}" numberUnit="#" intro="{= ${warehouse>source} + ' to ' + ${warehouse>destination} }">
-                <firstStatus><ObjectStatus text="{warehouse>status}" state="{= ${warehouse>status} === 'COMPLETED' ? 'Success' : ${warehouse>status} === 'FAILED' ? 'Error' : 'Information' }" /></firstStatus>
-              </ObjectListItem>
-            </List>
-          </Panel>
-          <Panel headerText="{i18n>inventory}" expandable="true" expanded="false">
-            <List items="{warehouse>/liveInventory}"><StandardListItem title="{warehouse>item}" description="{= ${warehouse>id} + ' / ' + ${warehouse>locationId} }" info="{warehouse>status}" /></List>
-          </Panel>
-          <VBox visible="{= ${warehouse>/mode} === 'SANDBOX' }" class="sandboxNotice">
-            <MessageStrip text="{i18n>sandboxNotice}" type="Warning" showIcon="true" />
-            <Button text="{i18n>moveForklift}" press=".onMoveForklift" />
+        <ToolbarSpacer />
+        <ObjectStatus text="{warehouse>/connectionStatus}" icon="sap-icon://connected"
+          state="{= ${warehouse>/connectionStatus} === 'CONNECTED' ? 'Success' : 'Warning' }" />
+        <ObjectStatus title="Vehicle" text="{= ${warehouse>/agv/id} + ' · ' + ${warehouse>/agv/status} }" icon="sap-icon://shipping-status"
+          state="{= ${warehouse>/agv/status} === 'MOVING' ? 'Information' : 'Success' }" />
+        <ProgressIndicator width="6rem" percentValue="{warehouse>/agv/battery}" displayValue="{= Math.round(${warehouse>/agv/battery}) + '%' }" state="Success" />
+        <Button text="Receive inventory" icon="sap-icon://add-product" press=".onOpenReceive" />
+        <Button text="{= ${warehouse>/operationState} === 'PAUSED' ? 'Resume fleet' : 'Pause fleet' }"
+          icon="{= ${warehouse>/operationState} === 'PAUSED' ? 'sap-icon://media-play' : 'sap-icon://media-pause' }" press=".onToggleOperations" />
+        <MenuButton text="Demo tools" icon="sap-icon://activate">
+          <menu><Menu itemSelected=".onDemoMenuItem"><items>
+            <MenuItem text="Inject VDA rejection" key="reject" icon="sap-icon://error" />
+            <MenuItem text="Block selected route" key="block" icon="sap-icon://road" />
+          </items></Menu></menu>
+        </MenuButton>
+        <Button text="New transport order" icon="sap-icon://add" type="Emphasized" press=".onOpenTransportOrder" />
+      </OverflowToolbar>
+
+      <HBox fitContainer="true" renderType="Bare" class="towerWorkspace">
+        <VBox width="19rem" renderType="Bare" class="orderRail">
+          <HBox justifyContent="SpaceBetween" alignItems="Center" class="railHeading">
+            <VBox><Title text="Transport orders" level="H2" /><Text text="Business intent and execution" /></VBox>
+            <ObjectNumber number="{= ${warehouse>/transportOrders}.length }" unit="total" />
+          </HBox>
+          <HBox class="orderMetrics">
+            <VBox><ObjectNumber number="{warehouse>/activeOrderCount}" state="Information" /><Text text="Active" /></VBox>
+            <VBox><ObjectNumber number="{warehouse>/queuedOrderCount}" /><Text text="Queued" /></VBox>
+            <VBox><ObjectNumber number="{warehouse>/attentionCount}" state="Error" /><Text text="Attention" /></VBox>
+          </HBox>
+          <List id="transportOrderList" items="{warehouse>/transportOrders}" itemPress=".onOrderPress" noDataText="No transport orders yet" showSeparators="None" class="transportOrderList">
+            <CustomListItem type="Active">
+              <VBox class="orderCard">
+                <HBox justifyContent="SpaceBetween" alignItems="Center">
+                  <Title text="{= 'TO-' + ${warehouse>shortId} }" level="H4" />
+                  <ObjectStatus text="{warehouse>status}" state="{= ${warehouse>status} === 'COMPLETED' ? 'Success' : ${warehouse>status} === 'FAILED' ? 'Error' : ${warehouse>status} === 'IN_PROGRESS' ? 'Information' : 'None' }" inverted="true" />
+                </HBox>
+                <Text text="{= ${warehouse>displayType} + ' · ' + ${warehouse>priority} }" class="orderType" />
+                <HBox justifyContent="SpaceBetween"><Text text="{= ${warehouse>tasks}.length + ' load task(s)' }" /><Text text="{warehouse>assignedAgv}" /></HBox>
+                <ProgressIndicator percentValue="{warehouse>progress}" displayValue="{= ${warehouse>completedTasks} + ' / ' + ${warehouse>tasks}.length }" state="Information" />
+              </VBox>
+            </CustomListItem>
+          </List>
+          <VBox class="railFooter">
+            <Button text="Reset scenario" icon="sap-icon://refresh" type="Transparent" press=".onResetSimulation" />
+            <HBox alignItems="Center" justifyContent="SpaceBetween">
+              <Label text="Simulation speed" labelFor="speedSelector" />
+              <SegmentedButton id="speedSelector" selectedKey="{warehouse>/timeScale}" selectionChange=".onSpeedChange">
+                <items><SegmentedButtonItem key="1" text="1x" /><SegmentedButtonItem key="2" text="2x" /><SegmentedButtonItem key="4" text="4x" /></items>
+              </SegmentedButton>
+            </HBox>
           </VBox>
         </VBox>
-      </VBox>
-      <VBox class="viewportColumn" renderType="Bare">
-        <layoutData><l:SplitterLayoutData size="auto" minSize="480" /></layoutData>
-        <warehouse:WarehouseViewport id="viewport" rackSelected=".onRackSelected" class="warehouseViewport" />
-        <Text text="{= ${warehouse>/mode} === 'SANDBOX' ? ${i18n>sceneHintSandbox} : ${i18n>sceneHintLive} }" class="sceneHint" />
-      </VBox>
-    </l:Splitter>
+
+        <VBox renderType="Bare" class="mapStage">
+          <HBox class="mapOverlay" justifyContent="SpaceBetween" alignItems="Start">
+            <VBox class="floatingCard"><Title text="Live warehouse" level="H3" /><Text text="{= ${warehouse>/selectedOrder/shortId} ? 'Selected TO-' + ${warehouse>/selectedOrder/shortId} : 'Select an order to inspect its route' }" /></VBox>
+            <HBox class="mapKpis">
+              <VBox class="floatingCard compactKpi"><ObjectNumber number="1" unit="/ 1" /><Text text="AGVs online" /></VBox>
+              <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/queuedOrderCount}" /><Text text="Queued" /></VBox>
+              <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/attentionCount}" state="Error" /><Text text="Attention" /></VBox>
+            </HBox>
+          </HBox>
+          <warehouse:WarehouseViewport id="viewport" rackSelected=".onRackSelected" class="warehouseViewport" />
+          <HBox class="routeLegend"><Text text="━ Released base" /><Text text="┅ Horizon" /></HBox>
+        </VBox>
+
+        <VBox width="23rem" renderType="Bare" class="orderDetail">
+          <VBox class="detailHeader">
+            <HBox justifyContent="SpaceBetween" alignItems="Start">
+              <VBox><Title text="{= ${warehouse>/selectedOrder/shortId} ? 'TO-' + ${warehouse>/selectedOrder/shortId} : 'No order selected' }" level="H2" />
+                <Text text="{= ${warehouse>/selectedOrder/type} ? (${warehouse>/selectedOrder/type} === 'PUTAWAY' ? 'Put-away' : 'Outbound') + ' · ' + ${warehouse>/selectedOrder/priority} + ' priority' : 'Choose or create a transport order' }" /></VBox>
+              <ObjectStatus text="{warehouse>/selectedOrder/status}" state="Information" inverted="true" />
+            </HBox>
+          </VBox>
+          <IconTabBar expandable="false" stretchContentHeight="true" class="detailTabs">
+            <items>
+              <IconTabFilter key="overview" text="Overview" icon="sap-icon://overview-chart">
+                <VBox class="detailPane">
+                  <Title text="Business intent" level="H4" /><Text text="{warehouse>/selectedOrder/objective}" class="intentText" />
+                  <HBox class="summaryGrid" wrap="Wrap">
+                    <VBox><Label text="Order type" /><Text text="{warehouse>/selectedOrder/type}" /></VBox>
+                    <VBox><Label text="Assigned vehicle" /><Text text="{= ${warehouse>/selectedOrder/tasks/0/assignedAgvId} || 'Awaiting AGV' }" /></VBox>
+                    <VBox><Label text="Tasks" /><Text text="{= ${warehouse>/selectedOrderTasks}.length }" /></VBox>
+                    <VBox><Label text="Priority" /><Text text="{warehouse>/selectedOrder/priority}" /></VBox>
+                  </HBox>
+                  <MessageStrip text="Priority controls fleet queueing and deliberately stays outside the VDA order payload." type="Information" showIcon="true" />
+                  <Button text="Cancel order" icon="sap-icon://decline" type="Negative" press=".onCancelSelectedOrder"
+                    enabled="{= !!${warehouse>/selectedOrder/id} &amp;&amp; ${warehouse>/selectedOrder/status} !== 'COMPLETED' &amp;&amp; ${warehouse>/selectedOrder/status} !== 'CANCELLED' }" />
+                </VBox>
+              </IconTabFilter>
+              <IconTabFilter key="tasks" text="Tasks" icon="sap-icon://process">
+                <List items="{warehouse>/selectedOrderTasks}" noDataText="No tasks generated yet">
+                  <ObjectListItem title="{warehouse>loadId}" number="{warehouse>sequence}" numberUnit="#" intro="{= ${warehouse>source} + ' → ' + ${warehouse>destination} }">
+                    <firstStatus><ObjectStatus text="{warehouse>status}" state="{= ${warehouse>status} === 'COMPLETED' ? 'Success' : ${warehouse>status} === 'FAILED' ? 'Error' : 'Information' }" /></firstStatus>
+                    <attributes><ObjectAttribute text="{= ${warehouse>assignedAgvId} || 'Not assigned' }" /></attributes>
+                  </ObjectListItem>
+                </List>
+              </IconTabFilter>
+              <IconTabFilter key="vda" text="VDA 5050" icon="sap-icon://source-code">
+                <VBox class="detailPane">
+                  <ObjectStatus title="Schema" text="VDA 5050 v3.0.0" icon="sap-icon://sys-enter-2" state="Success" />
+                  <List items="{warehouse>/selectedVdaDispatches}" noDataText="No protocol messages yet" showSeparators="Inner">
+                    <StandardListItem title="{= 'Order update ' + ${warehouse>orderUpdateId} }" description="{= ${warehouse>orderId} + ' · ' + ${warehouse>status} }" info="{= ${warehouse>valid} ? 'Valid' : 'Invalid' }" infoState="{= ${warehouse>valid} ? 'Success' : 'Error' }" />
+                  </List>
+                  <Label text="Latest payload" />
+                  <TextArea value="{warehouse>/selectedVdaPayload}" editable="false" growing="true" growingMaxLines="16" width="100%" class="protocolPayload" />
+                </VBox>
+              </IconTabFilter>
+              <IconTabFilter key="timeline" text="Timeline" icon="sap-icon://history">
+                <VBox class="detailPane timelinePane">
+                  <ObjectStatus title="Created" text="{warehouse>/selectedOrder/createdAt}" icon="sap-icon://create" state="Success" />
+                  <ObjectStatus title="Planned" text="Tasks and routes generated" icon="sap-icon://map-2" state="Success" />
+                  <ObjectStatus title="Dispatched" text="{= ${warehouse>/selectedVdaDispatches}.length ? 'Published over MQTT' : 'Waiting' }" icon="sap-icon://paper-plane" state="Information" />
+                  <ObjectStatus title="Current state" text="{warehouse>/selectedOrder/status}" icon="sap-icon://activity-2" state="Information" />
+                </VBox>
+              </IconTabFilter>
+            </items>
+          </IconTabBar>
+        </VBox>
+      </HBox>
+
+      <Toolbar class="activityStrip">
+        <ObjectStatus text="LIVE" state="Success" inverted="true" />
+        <Text text="{warehouse>/activityText}" />
+        <ToolbarSpacer />
+        <Text text="{= ${warehouse>/agv/velocity} + ' m/s · fork ' + ${warehouse>/agv/forkHeight} + ' m' }" />
+      </Toolbar>
+    </VBox>
   </Page>
+
+  <Dialog id="seedDialog" showHeader="false" contentWidth="54rem" stretchOnPhone="true" class="seedDialog">
+    <VBox class="seedContent">
+      <ObjectStatus text="VDA 5050 v3.0.0 DEMO" state="Information" icon="sap-icon://connected" />
+      <Title text="Choose today’s warehouse story" level="H1" />
+      <Text text="We’ll prepare inventory, fleet state, and representative transport orders. Work starts automatically." />
+      <HBox wrap="Wrap" class="scenarioTiles">
+        <GenericTile header="Balanced shift" subheader="Inbound and outbound share one vehicle" press=".onStartBalanced" class="scenarioTile">
+          <tileContent><TileContent footer="32 stored · 4 inbound"><content><NumericContent value="2" scale="orders" icon="sap-icon://process" /></content></TileContent></tileContent>
+        </GenericTile>
+        <GenericTile header="Inbound surge" subheader="Clear a busy staging lane" press=".onStartInbound" class="scenarioTile recommendedTile">
+          <tileContent><TileContent footer="12 inbound · High priority"><content><NumericContent value="6" scale="loads" icon="sap-icon://inbox" valueColor="Good" /></content></TileContent></tileContent>
+        </GenericTile>
+        <GenericTile header="Outbound wave" subheader="Fulfil a priority shipment" press=".onStartOutbound" class="scenarioTile">
+          <tileContent><TileContent footer="40 stored · Urgent"><content><NumericContent value="6" scale="loads" icon="sap-icon://shipping-status" valueColor="Critical" /></content></TileContent></tileContent>
+        </GenericTile>
+      </HBox>
+      <MessageStrip text="Reload keeps the selected scenario. Reset returns to this dialogue." type="Information" showIcon="true" />
+    </VBox>
+  </Dialog>
+
+  <Dialog id="transportOrderDialog" title="New transport order" contentWidth="36rem" stretchOnPhone="true">
+    <VBox class="dialogForm">
+      <Label text="Order type" labelFor="orderType" />
+      <SegmentedButton id="orderType" selectedKey="{warehouse>/orderType}" selectionChange=".onOrderTypeChange" width="100%">
+        <items><SegmentedButtonItem key="PUTAWAY" text="Put-away" icon="sap-icon://inbox" /><SegmentedButtonItem key="OUTBOUND" text="Outbound" icon="sap-icon://shipping-status" /></items>
+      </SegmentedButton>
+      <Label text="Eligible loads" labelFor="transportOrderLoads" />
+      <MultiComboBox id="transportOrderLoads" width="100%" items="{warehouse>/eligibleLoads}">
+        <core:Item key="{warehouse>id}" text="{= ${warehouse>id} + ' · ' + ${warehouse>item} + ' · ' + ${warehouse>locationId} }" />
+      </MultiComboBox>
+      <Label text="Operational priority" labelFor="orderPriority" />
+      <Select id="orderPriority" selectedKey="{warehouse>/orderPriority}" width="100%">
+        <items><core:Item key="NORMAL" text="Normal" /><core:Item key="HIGH" text="High" /><core:Item key="URGENT" text="Urgent" /></items>
+      </Select>
+      <Label text="Business objective" labelFor="orderObjective" />
+      <TextArea id="orderObjective" value="{warehouse>/orderObjective}" rows="3" width="100%" />
+      <MessageStrip text="The control tower will validate, plan, assign, and dispatch automatically. Priority affects fleet scheduling, not the VDA payload." type="Information" showIcon="true" />
+    </VBox>
+    <beginButton><Button text="Create and dispatch" type="Emphasized" press=".onCreateTransportOrder" /></beginButton>
+    <endButton><Button text="Cancel" press=".onCloseTransportOrder" /></endButton>
+  </Dialog>
+
+  <Dialog id="receiveDialog" title="Receive inventory" contentWidth="28rem" stretchOnPhone="true">
+    <VBox class="dialogForm">
+      <Label text="Material / SKU" labelFor="receiveSku" /><Input id="receiveSku" value="{warehouse>/receiveSku}" />
+      <Label text="Quantity" labelFor="receiveQuantity" /><StepInput id="receiveQuantity" value="{warehouse>/receiveQuantity}" min="1" max="50" width="100%" />
+      <MessageStrip text="Received loads enter INBOUND-01 and become eligible for a put-away transport order." type="Information" showIcon="true" />
+    </VBox>
+    <beginButton><Button text="Receive inventory" type="Emphasized" press=".onReceiveFromDialog" /></beginButton>
+    <endButton><Button text="Cancel" press=".onCloseReceive" /></endButton>
+  </Dialog>
 </mvc:View>

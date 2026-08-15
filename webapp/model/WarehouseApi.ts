@@ -1,4 +1,4 @@
-import type { WarehouseEvent, WarehouseSnapshot } from "./types";
+import type { ApiTransportOrder, ScenarioPreset, WarehouseEvent, WarehouseSnapshot } from "./types";
 
 export default class WarehouseApi {
   private socket?: WebSocket;
@@ -25,8 +25,32 @@ export default class WarehouseApi {
     return this.post("/api/v1/warehouses/linz/outbound-requests", { loadIds });
   }
 
+  public scenarioPresets(): Promise<ScenarioPreset[]> { return this.request("/api/v1/scenario-presets"); }
+
+  public seedScenario(presetId: string): Promise<WarehouseSnapshot> {
+    return this.post("/api/v1/warehouses/linz/scenario", { presetId });
+  }
+
+  public resetScenario(): Promise<WarehouseSnapshot> { return this.post("/api/v1/warehouses/linz/scenario/reset", {}); }
+
+  public createTransportOrder(type: "PUTAWAY" | "OUTBOUND", priority: "NORMAL" | "HIGH" | "URGENT", loadIds: string[], objective: string): Promise<ApiTransportOrder> {
+    return this.post("/api/v1/warehouses/linz/transport-orders", { type, priority, loadIds, objective });
+  }
+
+  public cancelTransportOrder(orderId: string): Promise<ApiTransportOrder> {
+    return this.post(`/api/v1/warehouses/linz/transport-orders/${orderId}/cancel`, {});
+  }
+
+  public demoEvent(type: "VDA_REJECTION" | "BLOCK_ROUTE", taskId?: string): Promise<void> {
+    return this.post("/api/v1/demo/events", { type, taskId });
+  }
+
   public operation(command: "pause" | "resume" | "reset"): Promise<unknown> {
     return this.post(`/api/v1/warehouses/linz/operations/${command}`, {});
+  }
+
+  public setSpeed(multiplier: 1 | 2 | 4): Promise<unknown> {
+    return this.post("/api/v1/warehouses/linz/operations/speed", { multiplier });
   }
 
   public connect(onEvent: (event: WarehouseEvent) => void, onStatus: (status: string) => void): void {

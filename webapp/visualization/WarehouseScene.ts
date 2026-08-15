@@ -6,7 +6,7 @@ import type { Vector3 as Vector3Type } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { TransformNode as TransformNodeType } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene as SceneType } from "@babylonjs/core/scene";
-import type { ObstacleDefinition, RackDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
+import type { ApiAgv, LoadVisualDefinition, ObstacleDefinition, RackDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
 
 const {
   ActionManager,
@@ -52,6 +52,8 @@ interface CargoItem {
   meshes?: Mesh[];
 }
 
+interface PoseSample { receivedAt: number; x: number; z: number; theta: number; velocity: number; }
+
 // Double both dimensions to provide four times the original floor area.
 const FLOOR_HALF_WIDTH = 24;
 const FLOOR_HALF_DEPTH = 18;
@@ -65,8 +67,11 @@ export default class WarehouseScene {
   private warehouseRoot?: TransformNodeType;
   private forklift?: TransformNodeType;
   private forkliftLift?: TransformNodeType;
-  private liveTarget?: Vector3Type;
-  private liveTheta = 0;
+  private readonly poseBuffer: PoseSample[] = [];
+  private lastRenderedPosition?: Vector3Type;
+  private readonly wheelMeshes: Mesh[] = [];
+  private forkliftForkAssembly?: TransformNodeType;
+  private readonly chargingIndicators = new Map<string, StandardMaterialType>();
   private sandboxMode = false;
   private readonly pressedKeys = new Set<string>();
   private manualControlActive = false;
@@ -142,14 +147,16 @@ export default class WarehouseScene {
       this.createRack(rack, config.accentColor);
     }
     for (const obstacle of config.obstacles ?? []) this.createObstacle(obstacle);
+    this.createParkingAreas(config.stations?.filter((station) => station.type === "PARKING_CHARGING") ?? []);
     this.createSign(config.signText, config.accentColor);
-    this.createInboundStaging(inboundStation, config.inboundCount ?? 0);
+    this.createInboundStaging(inboundStation, config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
     this.createOutboundConveyor(outboundStation, config.conveyorCount ?? 0);
     this.forkliftStops = [Vector3.FromArray(config.forkliftStops[0]), Vector3.FromArray(config.forkliftStops[1])];
     this.nextForkliftStop = 1;
     this.createForklift(previousForkliftPosition ?? this.forkliftStops[0], config.accentColor);
     if (previousForkliftRotation !== undefined && this.forklift) this.forklift.rotation.y = previousForkliftRotation;
-    if (config.carriedLoad) this.createLiveCarriedCargo();
+    if (config.carriedLoadId) this.createLiveCarriedCargo(config.carriedLoadId);
+    this.updateChargingIndicators(config.chargingStationId);
     this.telemetry("SCENE_CONFIGURED", {
       warehouseId: config.id, racks: config.racks.length, obstacles: config.obstacles?.length ?? 0,
       inbound: inboundStation.position, outbound: outboundStation.position
@@ -161,10 +168,11 @@ export default class WarehouseScene {
       this.setWarehouse(config);
       return;
     }
+    this.syncCarriedCargo(config.carriedLoadId);
     this.syncRackCargo(config.racks);
-    this.syncInboundCargo(config.inboundCount ?? 0);
+    this.syncInboundCargo(config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
     this.syncConveyorCargo(config.conveyorCount ?? 0);
-    this.syncCarriedCargo(Boolean(config.carriedLoad));
+    this.updateChargingIndicators(config.chargingStationId);
   }
 
   public moveForklift(): void {
@@ -206,16 +214,22 @@ export default class WarehouseScene {
     this.nextForkliftStop = destinationIndex === 0 ? 1 : 0;
   }
 
-  public setAgvPose(x: number, z: number, theta: number): void {
+  public setAgvState(agv: ApiAgv): void {
     if (this.sandboxMode) return;
-    this.liveTarget = new Vector3(x, this.forklift?.position.y ?? 0, z);
-    this.liveTheta = -theta - Math.PI / 2;
+    this.syncCarriedCargo(agv.carriedLoadId);
+    this.updateChargingIndicators(agv.charging ? agv.currentStationId : undefined);
+    const sample = { receivedAt: performance.now(), x: agv.x, z: agv.z, theta: -agv.theta - Math.PI / 2, velocity: agv.velocity ?? 0 };
+    const previous = this.poseBuffer.at(-1);
+    if (!previous || previous.x !== sample.x || previous.z !== sample.z || previous.theta !== sample.theta) this.poseBuffer.push(sample);
+    while (this.poseBuffer.length > 40) this.poseBuffer.shift();
+    if (this.forkliftLift) this.forkliftLift.position.y = Math.max(0, Math.min(MAX_FORK_HEIGHT, agv.forkHeight ?? 0));
+    if (this.forkliftForkAssembly) this.forkliftForkAssembly.position.z = -Math.max(0, Math.min(.7, agv.forkExtension ?? 0));
     const now = performance.now();
     if (now - this.lastPoseTelemetryAt >= 1000) {
       this.lastPoseTelemetryAt = now;
       this.telemetry("POSE_TARGET", {
-        x: Number(x.toFixed(2)), z: Number(z.toFixed(2)), theta: Number(theta.toFixed(2)),
-        renderedX: Number((this.forklift?.position.x ?? x).toFixed(2)), renderedZ: Number((this.forklift?.position.z ?? z).toFixed(2))
+        x: Number(agv.x.toFixed(2)), z: Number(agv.z.toFixed(2)), theta: Number(agv.theta.toFixed(2)), velocity: agv.velocity,
+        renderedX: Number((this.forklift?.position.x ?? agv.x).toFixed(2)), renderedZ: Number((this.forklift?.position.z ?? agv.z).toFixed(2))
       });
     }
   }
@@ -302,11 +316,12 @@ export default class WarehouseScene {
         }
       }
     }
-    for (let bay = 0; bay < rack.bays; bay += 1) {
+    if (rack.loads) {
+      for (const load of rack.loads) this.createCargo(rack, width, load.bay, load.level, cardboardMaterial, palletMaterial, parts, false, load.id);
+    } else for (let bay = 0; bay < rack.bays; bay += 1) {
       for (let level = 0; level < 3; level += 1) {
-        if (!rack.emptySlots?.some(([emptyBay, emptyLevel]) => emptyBay === bay && emptyLevel === level)) {
+        if (!rack.emptySlots?.some(([emptyBay, emptyLevel]) => emptyBay === bay && emptyLevel === level))
           this.createCargo(rack, width, bay, level, cardboardMaterial, palletMaterial, parts, false);
-        }
       }
     }
     for (const part of parts) {
@@ -333,7 +348,8 @@ export default class WarehouseScene {
     crateMaterial: StandardMaterialType,
     palletMaterial: StandardMaterialType,
     rackParts: Mesh[],
-    animateEntry: boolean
+    animateEntry: boolean,
+    loadId?: string
   ): CargoItem {
     const localX = -rackWidth / 2 + 0.52 + bay * 1.05;
     const rotationY = rack.rotationY ?? 0;
@@ -368,7 +384,7 @@ export default class WarehouseScene {
     crate.material = crateMaterial;
     crate.parent = cargoRoot;
     rackParts.push(...palletParts, crate);
-    const item = { id: `${rack.id}-${bay + 1}-${level + 1}`, root: cargoRoot, carried: false, meshes: [...palletParts, crate] };
+    const item = { id: loadId ?? `${rack.id}-${bay + 1}-${level + 1}`, root: cargoRoot, carried: false, meshes: [...palletParts, crate] };
     this.cargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
     return item;
@@ -448,31 +464,32 @@ export default class WarehouseScene {
       this.updateManualControls();
       return;
     }
-    if (!this.forklift || !this.liveTarget) return;
-    const blend = Math.min(1, this.engine.getDeltaTime() / 120);
-    const nextX = this.forklift.position.x + (this.liveTarget.x - this.forklift.position.x) * blend;
-    const nextZ = this.forklift.position.z + (this.liveTarget.z - this.forklift.position.z) * blend;
-    if (!this.collidesWithRack(nextX, nextZ)) {
-      this.forklift.position.x = nextX;
-      this.forklift.position.z = nextZ;
-      if (this.liveMotionBlocked) {
-        this.liveMotionBlocked = false;
-        this.telemetry("LIVE_COLLISION_CLEARED", { x: Number(nextX.toFixed(2)), z: Number(nextZ.toFixed(2)) });
-      }
-    } else if (!this.collidesWithRack(nextX, this.forklift.position.z)) {
-      this.forklift.position.x = nextX;
-    } else if (!this.collidesWithRack(this.forklift.position.x, nextZ)) {
-      this.forklift.position.z = nextZ;
-    } else if (!this.liveMotionBlocked) {
+    if (!this.forklift || this.poseBuffer.length === 0) return;
+    const renderAt = performance.now() - 150;
+    while (this.poseBuffer.length > 2 && this.poseBuffer[1].receivedAt <= renderAt) this.poseBuffer.shift();
+    const from = this.poseBuffer[0];
+    const to = this.poseBuffer[1] ?? from;
+    const span = Math.max(1, to.receivedAt - from.receivedAt);
+    const progress = Math.max(0, Math.min(1, (renderAt - from.receivedAt) / span));
+    const nextX = from.x + (to.x - from.x) * progress;
+    const nextZ = from.z + (to.z - from.z) * progress;
+    let headingDelta = Math.atan2(Math.sin(to.theta - from.theta), Math.cos(to.theta - from.theta));
+    const nextHeading = from.theta + headingDelta * progress;
+    const previous = this.lastRenderedPosition ?? this.forklift.position.clone();
+    const distance = Math.hypot(nextX - previous.x, nextZ - previous.z);
+    this.forklift.position.x = nextX;
+    this.forklift.position.z = nextZ;
+    this.forklift.rotation.y = nextHeading;
+    for (const wheel of this.wheelMeshes) wheel.rotation.x += distance / .25;
+    this.lastRenderedPosition = new Vector3(nextX, this.forklift.position.y, nextZ);
+    const collision = this.collidesWithRack(nextX, nextZ);
+    if (collision && !this.liveMotionBlocked) {
       this.liveMotionBlocked = true;
-      this.telemetry("LIVE_COLLISION_BLOCKED", {
-        targetX: Number(this.liveTarget.x.toFixed(2)), targetZ: Number(this.liveTarget.z.toFixed(2)),
-        renderedX: Number(this.forklift.position.x.toFixed(2)), renderedZ: Number(this.forklift.position.z.toFixed(2))
-      });
+      this.telemetry("LIVE_COLLISION_DETECTED", { x: Number(nextX.toFixed(2)), z: Number(nextZ.toFixed(2)) });
+    } else if (!collision && this.liveMotionBlocked) {
+      this.liveMotionBlocked = false;
+      this.telemetry("LIVE_COLLISION_CLEARED", { x: Number(nextX.toFixed(2)), z: Number(nextZ.toFixed(2)) });
     }
-    let delta = this.liveTheta - this.forklift.rotation.y;
-    delta = Math.atan2(Math.sin(delta), Math.cos(delta));
-    this.forklift.rotation.y += delta * blend;
   };
 
   private isControlKey(code: string): boolean {
@@ -605,6 +622,7 @@ export default class WarehouseScene {
         wheel.position.set(x, z < 0 ? 0.34 : 0.37, z);
         wheel.material = darkMaterial;
         wheel.parent = root;
+        this.wheelMeshes.push(wheel);
       }
     }
 
@@ -663,26 +681,29 @@ export default class WarehouseScene {
     const lift = new TransformNode("forkliftLift", this.scene);
     lift.parent = root;
     this.forkliftLift = lift;
+    const forkAssembly = new TransformNode("forkliftForkAssembly", this.scene);
+    forkAssembly.parent = lift;
+    this.forkliftForkAssembly = forkAssembly;
     const carriage = MeshBuilder.CreateBox("forkliftCarriage", { width: 0.78, height: 0.48, depth: 0.12 }, this.scene);
     carriage.position.set(0, 0.63, -0.9);
     carriage.material = darkMaterial;
-    carriage.parent = lift;
+    carriage.parent = forkAssembly;
     for (const x of [-0.25, 0.25]) {
       const backrest = MeshBuilder.CreateBox("forkliftBackrest", { width: 0.07, height: 0.75, depth: 0.07 }, this.scene);
       backrest.position.set(x, 0.82, -0.98);
       backrest.material = darkMaterial;
-      backrest.parent = lift;
+      backrest.parent = forkAssembly;
       const fork = MeshBuilder.CreateBox("forkliftFork", { width: 0.1, height: 0.09, depth: 1.35 }, this.scene);
       fork.position.set(x, 0.32, -1.5);
       fork.material = steelMaterial;
-      fork.parent = lift;
+      fork.parent = forkAssembly;
     }
   }
 
-  private createLiveCarriedCargo(animateEntry = false): void {
-    if (!this.forkliftLift) return;
-    const root = new TransformNode("liveCarriedCargo", this.scene);
-    root.parent = this.forkliftLift;
+  private createLiveCarriedCargo(loadId: string): void {
+    if (!this.forkliftForkAssembly) return;
+    const root = new TransformNode(`liveCarriedCargo-${loadId}`, this.scene);
+    root.parent = this.forkliftForkAssembly;
     root.position.set(0, 0.43, -1.72);
     const palletMaterial = this.createWoodMaterial("liveCargoPalletWood");
     const cardboardMaterial = this.createCardboardMaterial("liveCargoCardboard");
@@ -696,51 +717,38 @@ export default class WarehouseScene {
     }
     const box = MeshBuilder.CreateBox("liveCarriedBox", { width: 0.72, height: 0.56, depth: 0.56 }, this.scene);
     box.position.y = 0.34; box.material = cardboardMaterial; box.parent = root;
-    const item = { id: "live-carried-load", root, carried: true };
+    const item = { id: loadId, root, carried: true };
     this.carriedCargo = item;
     this.telemetry("CARGO_ATTACHED", {
-      animate: animateEntry, x: Number((this.forklift?.position.x ?? 0).toFixed(2)), z: Number((this.forklift?.position.z ?? 0).toFixed(2))
+      loadId, x: Number((this.forklift?.position.x ?? 0).toFixed(2)), z: Number((this.forklift?.position.z ?? 0).toFixed(2))
     });
-    if (animateEntry) {
-      root.scaling.set(0.22, 0.22, 0.22);
-      root.position.y = 0.12;
-      const scale = new Animation("liveCargoPickupScale", "scaling", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
-      scale.setKeys([{ frame: 0, value: root.scaling.clone() }, { frame: 32, value: new Vector3(1, 1, 1) }]);
-      const rise = new Animation("liveCargoPickupRise", "position.y", 60, Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
-      rise.setKeys([{ frame: 0, value: 0.12 }, { frame: 32, value: 0.43 }]);
-      const easing = new CubicEase();
-      easing.setEasingMode(EasingFunction.EASINGMODE_EASEOUT);
-      scale.setEasingFunction(easing);
-      rise.setEasingFunction(easing);
-      this.scene.beginDirectAnimation(root, [scale, rise], 0, 32, false);
-      this.animateForkHeight(0.28, 32);
-    }
   }
 
-  private syncCarriedCargo(shouldCarry: boolean): void {
-    if (shouldCarry && !this.carriedCargo) {
-      this.createLiveCarriedCargo(true);
+  private syncCarriedCargo(loadId?: string): void {
+    if (loadId && this.carriedCargo?.id === loadId) return;
+    if (this.carriedCargo) {
+      const previousId = this.carriedCargo.id;
+      this.carriedCargo.root.dispose(false, true);
+      this.carriedCargo = undefined;
+      this.telemetry("CARGO_DETACHED", { loadId: previousId });
+    }
+    if (!loadId || !this.forkliftForkAssembly) return;
+    const existing = [...this.inboundCargoItems, ...this.cargoItems].find((item) => item.id === loadId);
+    if (!existing) {
+      this.createLiveCarriedCargo(loadId);
       return;
     }
-    if (shouldCarry || !this.carriedCargo) return;
-    const cargo = this.carriedCargo;
-    this.carriedCargo = undefined;
-    this.telemetry("CARGO_DETACH_STARTED", {
-      x: Number((this.forklift?.position.x ?? 0).toFixed(2)), z: Number((this.forklift?.position.z ?? 0).toFixed(2))
-    });
-    const scale = new Animation("liveCargoDropScale", "scaling", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
-    scale.setKeys([{ frame: 0, value: cargo.root.scaling.clone() }, { frame: 26, value: new Vector3(0.12, 0.12, 0.12) }]);
-    const lower = new Animation("liveCargoDropLower", "position.y", 60, Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
-    lower.setKeys([{ frame: 0, value: cargo.root.position.y }, { frame: 26, value: 0.08 }]);
-    const easing = new CubicEase();
-    easing.setEasingMode(EasingFunction.EASINGMODE_EASEIN);
-    scale.setEasingFunction(easing);
-    lower.setEasingFunction(easing);
-    this.scene.beginDirectAnimation(cargo.root, [scale, lower], 0, 26, false, 1, () => {
-      cargo.root.dispose(false, true);
-      this.telemetry("CARGO_DETACHED", {});
-    });
-    this.animateForkHeight(0, 30);
+    const inboundIndex = this.inboundCargoItems.indexOf(existing);
+    if (inboundIndex >= 0) this.inboundCargoItems.splice(inboundIndex, 1);
+    const rackIndex = this.cargoItems.indexOf(existing);
+    if (rackIndex >= 0) this.cargoItems.splice(rackIndex, 1);
+    existing.root.parent = this.forkliftForkAssembly;
+    existing.root.position.set(0, .43, -1.72);
+    existing.root.rotation.set(0, 0, 0);
+    existing.root.scaling.set(1, 1, 1);
+    existing.carried = true;
+    this.carriedCargo = existing;
+    this.telemetry("CARGO_ATTACHED", { loadId });
   }
 
   private animateForkHeight(height: number, frames: number): void {
@@ -844,7 +852,94 @@ export default class WarehouseScene {
     sign.parent = this.warehouseRoot ?? null;
   }
 
-  private createInboundStaging(station: StationDefinition, count: number): void {
+  private createParkingAreas(stations: StationDefinition[]): void {
+    if (stations.length === 0) return;
+    const bay = this.createMaterial("parkingBay", "#2d9c73");
+    const safety = this.createMaterial("parkingSafety", "#f2c94c");
+    const charger = this.createMetalMaterial("parkingCharger", "#323a42", 68);
+
+    stations.forEach((station, index) => {
+      const halfWidth = station.width / 2;
+      const halfDepth = station.depth / 2;
+      for (const [x, z, width, depth] of [
+        [0, -halfDepth, station.width, 0.1],
+        [0, halfDepth, station.width, 0.1],
+        [-halfWidth, 0, 0.1, station.depth],
+        [halfWidth, 0, 0.1, station.depth]
+      ] as number[][]) {
+        const line = MeshBuilder.CreateBox(`parking-${index + 1}-boundary`, { width, height: 0.025, depth }, this.scene);
+        const point = this.stationPoint(station, x, z);
+        line.position.set(point.x, 0.018, point.z);
+        line.rotation.y = station.rotationY;
+        line.material = bay;
+        line.parent = this.warehouseRoot ?? null;
+      }
+
+      const postPoint = this.stationPoint(station, 0, halfDepth - 0.28);
+      const post = MeshBuilder.CreateBox(`parking-${index + 1}-charger`, { width: 0.62, height: 1.25, depth: 0.38 }, this.scene);
+      post.position.set(postPoint.x, 0.625, postPoint.z);
+      post.rotation.y = station.rotationY;
+      post.material = charger;
+      post.parent = this.warehouseRoot ?? null;
+      const screenPoint = this.stationPoint(station, 0, halfDepth - 0.48);
+      const display = this.createMaterial(`parkingDisplay-${station.id}`, "#20473c");
+      display.emissiveColor = new Color3(.05, .18, .13);
+      this.chargingIndicators.set(station.id, display);
+      const screen = MeshBuilder.CreateBox(`parking-${index + 1}-display`, { width: 0.34, height: 0.22, depth: 0.025 }, this.scene);
+      screen.position.set(screenPoint.x, 0.82, screenPoint.z);
+      screen.rotation.y = station.rotationY;
+      screen.material = display;
+      screen.parent = this.warehouseRoot ?? null;
+      const chargePad = MeshBuilder.CreateBox(`parking-${index + 1}-charge-pad`, { width: 1.15, height: .025, depth: .72 }, this.scene);
+      const padPoint = this.stationPoint(station, 0, .15);
+      chargePad.position.set(padPoint.x, .02, padPoint.z); chargePad.rotation.y = station.rotationY;
+      chargePad.material = charger; chargePad.parent = this.warehouseRoot ?? null;
+      for (const x of [-.34, .34]) {
+        const contact = MeshBuilder.CreateBox(`parking-${index + 1}-contact`, { width: .17, height: .035, depth: .5 }, this.scene);
+        const contactPoint = this.stationPoint(station, x, .15);
+        contact.position.set(contactPoint.x, .045, contactPoint.z); contact.rotation.y = station.rotationY;
+        contact.material = display; contact.parent = this.warehouseRoot ?? null;
+      }
+      for (const x of [-0.72, 0.72]) {
+        const stopPoint = this.stationPoint(station, x, -halfDepth + 0.42);
+        const wheelStop = MeshBuilder.CreateBox(`parking-${index + 1}-wheel-stop`, { width: 0.46, height: 0.12, depth: 0.18 }, this.scene);
+        wheelStop.position.set(stopPoint.x, 0.06, stopPoint.z);
+        wheelStop.rotation.y = station.rotationY;
+        wheelStop.material = safety;
+        wheelStop.parent = this.warehouseRoot ?? null;
+      }
+
+      const texture = new DynamicTexture(`parking-${index + 1}-label-texture`, { width: 256, height: 128 }, this.scene, true);
+      texture.hasAlpha = true;
+      texture.drawText(`P${index + 1} CHARGE`, null, 84, "bold 42px Arial", "#63e6be", "transparent", true, true);
+      const labelMaterial = new StandardMaterial(`parking-${index + 1}-label-material`, this.scene);
+      labelMaterial.diffuseTexture = texture;
+      labelMaterial.emissiveColor = new Color3(0.12, 0.3, 0.24);
+      labelMaterial.useAlphaFromDiffuseTexture = true;
+      const label = MeshBuilder.CreatePlane(`parking-${index + 1}-label`, { width: 1.4, height: 0.7 }, this.scene);
+      const labelPoint = this.stationPoint(station, 0, 0);
+      label.position.set(labelPoint.x, 0.026, labelPoint.z);
+      label.rotation.x = Math.PI / 2;
+      label.rotation.y = station.rotationY + Math.PI;
+      label.material = labelMaterial;
+      label.parent = this.warehouseRoot ?? null;
+    });
+    this.telemetry("PARKING_AREAS_CREATED", { count: stations.length, ids: stations.map((station) => station.id) });
+  }
+
+  private updateChargingIndicators(activeStationId?: string): void {
+    for (const [stationId, material] of this.chargingIndicators) {
+      const active = stationId === activeStationId;
+      material.diffuseColor = Color3.FromHexString(active ? "#63e6be" : "#20473c");
+      material.emissiveColor = Color3.FromHexString(active ? "#27c98b" : "#0d3025");
+    }
+  }
+
+  private placeholderLoads(count: number): LoadVisualDefinition[] {
+    return Array.from({ length: Math.min(count, 20) }, (_, index) => ({ id: `placeholder-${index}`, item: "PALLET" }));
+  }
+
+  private createInboundStaging(station: StationDefinition, loads: LoadVisualDefinition[]): void {
     this.inboundStation = station;
     const cardboard = this.createCardboardMaterial("inboundCardboard");
     const pallet = this.createWoodMaterial("inboundPalletWood");
@@ -857,33 +952,47 @@ export default class WarehouseScene {
       line.position.set(point.x, 0.015, point.z); line.rotation.y = station.rotationY; line.material = yellow; line.parent = this.warehouseRoot ?? null;
     }
     this.createDockEquipment(station, "RECEIVING");
-    for (let index = 0; index < Math.min(count, 20); index += 1) this.addInboundCargo(index, false);
+    loads.slice(0, 20).forEach((load, index) => this.addInboundCargo(load, index, false));
   }
 
-  private addInboundCargo(index: number, animateEntry: boolean): void {
+  private addInboundCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean): void {
     if (!this.inboundCardboardMaterial || !this.inboundPalletMaterial || !this.inboundStation) return;
     const point = this.stationPoint(this.inboundStation, 2.25 - Math.floor(index / 5) * 0.88, -2.1 + (index % 5) * 0.84);
-    const root = new TransformNode(`inboundCargo-${index}`, this.scene);
+    const root = new TransformNode(`inboundCargo-${load.id}`, this.scene);
     root.position.set(point.x, 0, point.z);
     root.rotation.y = this.inboundStation.rotationY;
     root.parent = this.warehouseRoot ?? null;
-    const base = MeshBuilder.CreateBox(`inboundPallet-${index}`, { width: 0.76, height: 0.1, depth: 0.62 }, this.scene);
+    const base = MeshBuilder.CreateBox(`inboundPallet-${load.id}`, { width: 0.76, height: 0.1, depth: 0.62 }, this.scene);
     base.position.y = 0.08; base.material = this.inboundPalletMaterial; base.parent = root;
-    const box = MeshBuilder.CreateBox(`inboundBox-${index}`, { width: 0.66, height: 0.58, depth: 0.54 }, this.scene);
+    const box = MeshBuilder.CreateBox(`inboundBox-${load.id}`, { width: 0.66, height: 0.58, depth: 0.54 }, this.scene);
     box.position.y = 0.42; box.material = this.inboundCardboardMaterial; box.parent = root;
-    const item = { id: `inbound-${index}`, root, carried: false, meshes: [base, box] };
+    const label = MeshBuilder.CreateBox(`inboundLabel-${load.id}`, { width: 0.32, height: 0.012, depth: 0.22 }, this.scene);
+    label.position.set(0, 0.715, 0); label.material = this.createMaterial(`inboundLabelMaterial-${load.id}`, "#f3f0dc"); label.parent = root;
+    const item = { id: load.id, root, carried: false, meshes: [base, box, label] };
     this.inboundCargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
   }
 
-  private syncInboundCargo(count: number): void {
-    const target = Math.min(count, 20);
-    if (target !== this.inboundCargoItems.length) this.telemetry("INBOUND_COUNT_CHANGED", { from: this.inboundCargoItems.length, to: target });
-    while (this.inboundCargoItems.length < target) this.addInboundCargo(this.inboundCargoItems.length, true);
-    while (this.inboundCargoItems.length > target) {
-      const item = this.inboundCargoItems.pop();
-      if (item) this.animateCargoExit(item, new Vector3(0.18, 0.18, 0.18));
+  private syncInboundCargo(loads: LoadVisualDefinition[]): void {
+    const desired = loads.slice(0, 20);
+    const desiredIds = new Set(desired.map((load) => load.id));
+    const previousIds = this.inboundCargoItems.map((item) => item.id);
+    for (const item of [...this.inboundCargoItems]) {
+      if (desiredIds.has(item.id)) continue;
+      this.inboundCargoItems.splice(this.inboundCargoItems.indexOf(item), 1);
+      this.animateCargoExit(item, new Vector3(0.18, 0.18, 0.18));
     }
+    desired.forEach((load, index) => {
+      if (!this.inboundCargoItems.some((item) => item.id === load.id)) this.addInboundCargo(load, index, true);
+    });
+    desired.forEach((load, index) => {
+      const item = this.inboundCargoItems.find((candidate) => candidate.id === load.id);
+      if (!item || !this.inboundStation) return;
+      const point = this.stationPoint(this.inboundStation, 2.25 - Math.floor(index / 5) * 0.88, -2.1 + (index % 5) * 0.84);
+      item.root.position.x = point.x; item.root.position.z = point.z;
+    });
+    const currentIds = this.inboundCargoItems.map((item) => item.id);
+    if (JSON.stringify(previousIds) !== JSON.stringify(currentIds)) this.telemetry("INBOUND_LOADS_SYNCED", { previousIds, currentIds });
   }
 
   private createOutboundConveyor(station: StationDefinition, count: number): void {
@@ -952,30 +1061,21 @@ export default class WarehouseScene {
   }
 
   private syncRackCargo(racks: RackDefinition[]): void {
-    const desired = new Set<string>();
+    const desired = new Map<string, { rack: RackDefinition; bay: number; level: number }>();
     for (const rack of racks) {
-      for (let bay = 0; bay < rack.bays; bay += 1) {
-        for (let level = 0; level < 3; level += 1) {
-          if (!rack.emptySlots?.some(([emptyBay, emptyLevel]) => emptyBay === bay && emptyLevel === level)) {
-            desired.add(`${rack.id}-${bay + 1}-${level + 1}`);
-          }
-        }
-      }
+      if (rack.loads) for (const load of rack.loads) desired.set(load.id, { rack, bay: load.bay, level: load.level });
+      else for (let bay = 0; bay < rack.bays; bay += 1) for (let level = 0; level < 3; level += 1)
+        if (!rack.emptySlots?.some(([emptyBay, emptyLevel]) => emptyBay === bay && emptyLevel === level))
+          desired.set(`${rack.id}-${bay + 1}-${level + 1}`, { rack, bay, level });
     }
     for (const rack of racks) {
       const parts = this.rackParts.get(rack.id);
       if (!parts) continue;
-      for (let bay = 0; bay < rack.bays; bay += 1) {
-        for (let level = 0; level < 3; level += 1) {
-          const id = `${rack.id}-${bay + 1}-${level + 1}`;
-          if (desired.has(id) && !this.cargoItems.some((item) => item.id === id)) {
-            this.createCargo(rack, parts.width, bay, level, parts.cardboardMaterial, parts.palletMaterial, parts.meshes, true);
-          }
-        }
-      }
+      for (const [id, target] of desired) if (target.rack.id === rack.id && !this.cargoItems.some((item) => item.id === id))
+        this.createCargo(rack, parts.width, target.bay, target.level, parts.cardboardMaterial, parts.palletMaterial, parts.meshes, true, id);
     }
     for (const item of [...this.cargoItems]) {
-      if (desired.has(item.id)) continue;
+      if (desired.has(item.id) || item.carried) continue;
       this.cargoItems.splice(this.cargoItems.indexOf(item), 1);
       this.animateCargoExit(item, new Vector3(0.12, 0.12, 0.12));
     }
@@ -1173,6 +1273,10 @@ export default class WarehouseScene {
     this.cargoItems.length = 0;
     this.inboundCargoItems.length = 0;
     this.conveyorCargoItems.length = 0;
+    this.poseBuffer.length = 0;
+    this.wheelMeshes.length = 0;
+    this.chargingIndicators.clear();
+    this.lastRenderedPosition = undefined;
     this.carriedCargo = undefined;
     this.inboundCardboardMaterial = undefined;
     this.inboundPalletMaterial = undefined;
@@ -1181,8 +1285,8 @@ export default class WarehouseScene {
     this.selectedRackId = undefined;
     this.forklift = undefined;
     this.forkliftLift = undefined;
+    this.forkliftForkAssembly = undefined;
     this.forkliftStops = undefined;
-    this.liveTarget = undefined;
     this.highlightMaterial = undefined;
     this.liveMotionBlocked = false;
     this.warehouseRoot?.dispose(false, true);

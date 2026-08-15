@@ -4,10 +4,11 @@ import MessageToast from "sap/m/MessageToast";
 import MessageBox from "sap/m/MessageBox";
 import MultiComboBox from "sap/m/MultiComboBox";
 import SegmentedButton from "sap/m/SegmentedButton";
+import Dialog from "sap/m/Dialog";
 import type Event from "sap/ui/base/Event";
 import WarehouseViewport from "../control/WarehouseViewport";
 import WarehouseApi from "../model/WarehouseApi";
-import type { ApiAgv, WarehouseEvent, WarehouseModelData, WarehouseSnapshot, WarehouseVisualConfig } from "../model/types";
+import type { ApiAgv, ApiTransportOrder, WarehouseEvent, WarehouseModelData, WarehouseSnapshot, WarehouseVisualConfig } from "../model/types";
 import { projectVisualConfig } from "../model/warehouseState";
 
 /** @namespace warehouse.visualizer.controller */
@@ -19,6 +20,7 @@ export default class MainController extends Controller {
   private refreshTimer?: number;
   private readonly loadStatuses = new Map<string, string>();
   private readonly jobStatuses = new Map<string, string>();
+  private simulationEpoch = 0;
 
   public onInit(): void {
     this.getView()?.addEventDelegate({ onAfterRendering: () => this.initialize() });
@@ -81,9 +83,18 @@ export default class MainController extends Controller {
     } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
   }
 
+  public async onSpeedChange(event: Event): Promise<void> {
+    const multiplier = Number((event.getSource() as SegmentedButton).getSelectedKey()) as 1 | 2 | 4;
+    try {
+      await this.api.setSpeed(multiplier);
+      this.model().setProperty("/timeScale", multiplier);
+      MessageToast.show(`Simulation speed set to ${multiplier}x.`);
+    } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
+  }
+
   public onResetSimulation(): void {
-    MessageBox.confirm("Reset all jobs and shipment history to the seeded 43-box warehouse baseline?", {
-      title: "Reset simulation",
+    MessageBox.confirm("Clear the current scenario and return to the startup dialogue?", {
+      title: "Reset scenario",
       emphasizedAction: MessageBox.Action.OK,
       actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
       onClose: (action: string | null) => { if (action === MessageBox.Action.OK) void this.performReset(); }
@@ -92,10 +103,94 @@ export default class MainController extends Controller {
 
   private async performReset(): Promise<void> {
     try {
-      await this.api.operation("reset");
-      await this.loadSnapshot();
-      MessageToast.show("Simulation reset to the demo baseline.");
+      const snapshot = await this.api.resetScenario();
+      this.applySnapshot(snapshot);
+      this.seedDialog()?.open();
+      MessageToast.show("Scenario cleared. Choose the next warehouse story.");
     } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
+  }
+
+  public onStartBalanced(): void { void this.startScenario("balanced-shift"); }
+  public onStartInbound(): void { void this.startScenario("inbound-surge"); }
+  public onStartOutbound(): void { void this.startScenario("outbound-wave"); }
+
+  private async startScenario(presetId: string): Promise<void> {
+    const dialog = this.seedDialog();
+    dialog?.setBusy(true);
+    try {
+      const snapshot = await this.api.seedScenario(presetId);
+      this.applySnapshot(snapshot);
+      dialog?.close();
+      MessageToast.show(`${snapshot.scenario.name ?? "Scenario"} started. The first task is being dispatched.`);
+    } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
+    finally { dialog?.setBusy(false); }
+  }
+
+  public onOpenTransportOrder(): void {
+    this.updateEligibleLoads();
+    (this.byId("transportOrderDialog") as Dialog | undefined)?.open();
+  }
+
+  public onCloseTransportOrder(): void { (this.byId("transportOrderDialog") as Dialog | undefined)?.close(); }
+
+  public onOrderTypeChange(): void {
+    this.model().setProperty("/selectedLoadIds", []);
+    this.updateEligibleLoads();
+  }
+
+  public async onCreateTransportOrder(): Promise<void> {
+    const model = this.model();
+    const type = String(model.getProperty("/orderType")) as "PUTAWAY" | "OUTBOUND";
+    const priority = String(model.getProperty("/orderPriority")) as "NORMAL" | "HIGH" | "URGENT";
+    const selector = this.byId("transportOrderLoads") as MultiComboBox;
+    const loadIds = selector.getSelectedKeys();
+    if (loadIds.length === 0) { MessageToast.show("Select at least one eligible load."); return; }
+    const dialog = this.byId("transportOrderDialog") as Dialog;
+    dialog.setBusy(true);
+    try {
+      const order = await this.api.createTransportOrder(type, priority, loadIds, String(model.getProperty("/orderObjective") || ""));
+      dialog.close();
+      MessageToast.show(`Transport order ${order.id.slice(0, 8)} created and queued for auto-dispatch.`);
+      await this.loadSnapshot();
+    } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
+    finally { dialog.setBusy(false); }
+  }
+
+  public onOpenReceive(): void { (this.byId("receiveDialog") as Dialog | undefined)?.open(); }
+  public onCloseReceive(): void { (this.byId("receiveDialog") as Dialog | undefined)?.close(); }
+
+  public async onReceiveFromDialog(): Promise<void> {
+    await this.onReceive();
+    (this.byId("receiveDialog") as Dialog | undefined)?.close();
+  }
+
+  public onOrderPress(event: Event): void {
+    const parameters = event.getParameters() as { listItem?: { getBindingContext: (name: string) => { getObject: () => ApiTransportOrder } | null } };
+    const order = parameters.listItem?.getBindingContext("warehouse")?.getObject();
+    if (order) this.selectOrder(order);
+  }
+
+  public async onCancelSelectedOrder(): Promise<void> {
+    const order = this.model().getProperty("/selectedOrder") as ApiTransportOrder | null;
+    if (!order || ["COMPLETED", "CANCELLED"].includes(order.status)) return;
+    try { await this.api.cancelTransportOrder(order.id); await this.loadSnapshot(); MessageToast.show("Transport order cancelled through VDA instant actions."); }
+    catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
+  }
+
+  public async onDemoReject(): Promise<void> { await this.runDemoEvent("VDA_REJECTION"); }
+  public async onDemoBlock(): Promise<void> { await this.runDemoEvent("BLOCK_ROUTE"); }
+
+  public onDemoMenuItem(event: Event): void {
+    const parameters = event.getParameters() as { item?: { getKey: () => string } };
+    if (parameters.item?.getKey() === "reject") void this.onDemoReject();
+    if (parameters.item?.getKey() === "block") void this.onDemoBlock();
+  }
+
+  private async runDemoEvent(type: "VDA_REJECTION" | "BLOCK_ROUTE"): Promise<void> {
+    const order = this.model().getProperty("/selectedOrder") as ApiTransportOrder | null;
+    const taskId = order?.tasks.find((task) => ["DISPATCHED", "ACCEPTED", "EXECUTING"].includes(task.status))?.id;
+    try { await this.api.demoEvent(type, taskId); MessageToast.show(type === "VDA_REJECTION" ? "VDA rejection injected." : "Route blockage injected."); }
+    catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
   }
 
   public onModeChange(event: Event): void {
@@ -141,21 +236,44 @@ export default class MainController extends Controller {
   private applySnapshot(snapshot: WarehouseSnapshot): void {
     this.trackAnimationState(snapshot);
     const model = this.model();
+    const agv = snapshot.agvs[0];
+    this.simulationEpoch = snapshot.runtime.simulationEpoch;
     const inbound = snapshot.loads.filter((load) => load.status === "INBOUND");
     model.setProperty("/warehouseName", snapshot.name);
     model.setProperty("/inboundLoads", inbound);
     model.setProperty("/storedLoads", snapshot.loads.filter((load) => load.status === "STORED"));
     model.setProperty("/operationState", snapshot.runtime.operationState);
+    model.setProperty("/timeScale", snapshot.runtime.timeScale);
     model.setProperty("/selectedLoadIds", inbound.map((load) => load.id));
     model.setProperty("/liveInventory", snapshot.loads);
     model.setProperty("/jobs", snapshot.jobs);
+    model.setProperty("/tasks", snapshot.tasks);
+    const orders = snapshot.transportOrders.map((order) => ({
+      ...order,
+      shortId: order.id.slice(0, 8).toUpperCase(),
+      displayType: order.type === "PUTAWAY" ? "Put-away" : "Outbound",
+      completedTasks: order.tasks.filter((task) => task.status === "COMPLETED").length,
+      progress: order.tasks.length ? Math.round(order.tasks.filter((task) => task.status === "COMPLETED").length / order.tasks.length * 100) : 0,
+      assignedAgv: order.tasks.find((task) => task.assignedAgvId)?.assignedAgvId ?? "Awaiting AGV"
+    }));
+    model.setProperty("/transportOrders", orders);
+    model.setProperty("/scenario", snapshot.scenario);
+    model.setProperty("/activeOrderCount", orders.filter((order) => order.status === "IN_PROGRESS").length);
+    model.setProperty("/queuedOrderCount", orders.filter((order) => ["PLANNING", "READY"].includes(order.status)).length);
+    model.setProperty("/attentionCount", orders.filter((order) => ["FAILED", "REJECTED"].includes(order.status)).length);
+    const selectedId = (model.getProperty("/selectedOrder") as ApiTransportOrder | null)?.id;
+    const selected = orders.find((order) => order.id === selectedId) ?? orders[0];
+    if (selected) this.selectOrder(selected);
+    else this.selectOrder(null);
     model.setProperty("/agv", snapshot.agvs[0] || {});
+    model.setProperty("/activityText", this.activityText(snapshot));
+    this.updateEligibleLoads();
     const selector = this.byId("inboundLoads") as MultiComboBox | undefined;
     selector?.setSelectedKeys(inbound.map((load) => load.id));
     const occupied = new Set(snapshot.loads
       .filter((load) => ["STORED", "OUTBOUND_QUEUED"].includes(load.status))
       .map((load) => load.locationId));
-    const stations = snapshot.locations.filter((location) => location.type === "INBOUND" || location.type === "OUTBOUND");
+    const stations = snapshot.locations.filter((location) => ["INBOUND", "OUTBOUND", "PARKING_CHARGING"].includes(location.type));
     const inboundStation = stations.find((station) => station.type === "INBOUND");
     const outboundStation = stations.find((station) => station.type === "OUTBOUND");
     const visual: WarehouseVisualConfig = {
@@ -165,8 +283,14 @@ export default class MainController extends Controller {
         accentColor: "#0a6ed1",
         racks: snapshot.racks.map((rack) => {
           const slots = snapshot.locations.filter((location) => location.rackId === rack.id);
+          const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+          const loads = snapshot.loads.filter((load) => ["STORED", "OUTBOUND_QUEUED"].includes(load.status) && slotById.has(load.locationId)).map((load) => {
+            const slot = slotById.get(load.locationId)!;
+            return { id: load.id, item: load.item, bay: slot.bayIndex ?? 0, level: slot.levelIndex ?? 0 };
+          });
           return {
             id: rack.id, name: rack.name, position: [rack.x, 0, rack.z] as [number, number, number], rotationY: rack.rotationY, bays: rack.bays,
+            loads,
             emptySlots: slots.length > 0
               ? slots.filter((location) => !occupied.has(location.id)).map((location) => [location.bayIndex ?? 0, location.levelIndex ?? 0] as [number, number])
               : Array.from({ length: rack.bays * 3 }, (_, index) => [index % rack.bays, Math.floor(index / rack.bays)] as [number, number])
@@ -178,7 +302,7 @@ export default class MainController extends Controller {
         ],
         stations: stations.map((station) => ({
           id: station.id,
-          type: station.type as "INBOUND" | "OUTBOUND",
+          type: station.type as "INBOUND" | "OUTBOUND" | "PARKING_CHARGING",
           position: [station.x, 0, station.z],
           rotationY: station.rotationY ?? 0,
           width: station.operatingWidth ?? 7,
@@ -189,14 +313,18 @@ export default class MainController extends Controller {
           width: obstacle.width, depth: obstacle.depth, height: obstacle.height
         })),
         inboundCount: inbound.length,
+        inboundLoads: inbound.map((load) => ({ id: load.id, item: load.item })),
         conveyorCount: snapshot.loads.filter((load) => load.status === "ON_CONVEYOR").length,
-        carriedLoad: snapshot.loads.some((load) => load.status === "IN_TRANSIT")
+        carriedLoadId: agv?.carriedLoadId,
+        chargingStationId: agv?.charging ? agv.currentStationId : undefined
       };
     const signature = JSON.stringify({
       ...visual,
       inboundCount: undefined,
+      inboundLoads: undefined,
       conveyorCount: undefined,
-      carriedLoad: undefined,
+      carriedLoadId: undefined,
+      chargingStationId: undefined,
       racks: visual.racks.map(({ emptySlots: _emptySlots, ...rack }) => rack)
     });
     if (!this.sceneConfigured || signature !== this.sceneSignature) {
@@ -206,16 +334,24 @@ export default class MainController extends Controller {
     } else {
       this.viewport()?.updateOperations(visual);
     }
-    const agv = snapshot.agvs[0];
     if (agv) this.applyAgv(agv);
+    if (!snapshot.scenario.configured) window.setTimeout(() => this.seedDialog()?.open(), 0);
   }
 
   private onWarehouseEvent(event: WarehouseEvent): void {
     if (this.model().getProperty("/mode") === "SANDBOX") return;
-    if (event.type === "AGV_UPDATED") {
+    if (event.simulationEpoch < this.simulationEpoch) return;
+    if (event.type === "AGV_POSE" || event.type === "AGV_UPDATED" || event.type === "AGV_HANDLING_UPDATED") {
       const agv = event.payload as ApiAgv;
       this.model().setProperty("/agv", agv);
       this.applyAgv(agv);
+      this.model().setProperty("/activityText", this.activityText(undefined, agv));
+      return;
+    }
+    if (event.type === "VDA_REJECTION" || event.type === "BLOCK_ROUTE") {
+      const payload = event.payload as { message?: string };
+      this.model().setProperty("/activityText", payload.message ?? event.type);
+      this.model().setProperty("/attentionCount", 1);
       return;
     }
     if (event.type === "PUTAWAY_REJECTED") {
@@ -230,7 +366,7 @@ export default class MainController extends Controller {
   }
 
   private applyAgv(agv: ApiAgv): void {
-    if (this.model().getProperty("/mode") !== "SANDBOX") this.viewport()?.setAgvPose(agv.x, agv.z, agv.theta);
+    if (this.model().getProperty("/mode") !== "SANDBOX") this.viewport()?.setAgvState(agv);
   }
 
   private trackAnimationState(snapshot: WarehouseSnapshot): void {
@@ -259,6 +395,33 @@ export default class MainController extends Controller {
   }
 
   private viewport(): WarehouseViewport | undefined { return this.byId("viewport") as WarehouseViewport | undefined; }
+
+  private seedDialog(): Dialog | undefined { return this.byId("seedDialog") as Dialog | undefined; }
+
+  private selectOrder(order: ApiTransportOrder | null): void {
+    const model = this.model();
+    model.setProperty("/selectedOrder", order);
+    model.setProperty("/selectedOrderTasks", order?.tasks ?? []);
+    model.setProperty("/selectedVdaDispatches", order?.vdaDispatches ?? []);
+    model.setProperty("/selectedVdaPayload", order?.vdaDispatches[0]?.payload
+      ? JSON.stringify(JSON.parse(order.vdaDispatches[0].payload), null, 2)
+      : "No VDA order has been published yet.");
+  }
+
+  private updateEligibleLoads(): void {
+    const model = this.model();
+    const type = String(model.getProperty("/orderType"));
+    model.setProperty("/eligibleLoads", type === "OUTBOUND" ? model.getProperty("/storedLoads") : model.getProperty("/inboundLoads"));
+  }
+
+  private activityText(snapshot?: WarehouseSnapshot, agvOverride?: ApiAgv): string {
+    const agv = agvOverride ?? snapshot?.agvs[0] ?? this.model().getProperty("/agv") as ApiAgv;
+    if (!agv?.id) return "Waiting for AGV telemetry.";
+    if (agv.handlingPhase && !["IDLE", "COMPLETE"].includes(agv.handlingPhase)) return `${agv.id} · ${agv.handlingPhase.replaceAll("_", " ").toLowerCase()}${agv.carriedLoadId ? ` · ${agv.carriedLoadId}` : ""}`;
+    if (agv.status === "MOVING") return `${agv.id} is executing a transport task at ${agv.velocity.toFixed(1)} m/s.`;
+    if (agv.charging) return `${agv.id} is charging at ${Math.round(agv.battery)}%.`;
+    return `${agv.id} is ${agv.status.toLowerCase()} and ready for the next task.`;
+  }
 
   private model(): JSONModel {
     const model = this.getOwnerComponent()?.getModel("warehouse");
