@@ -43,6 +43,20 @@ npx playwright test --headed                      # or npm run test:e2e:headed
 - `workers: 1` is deliberate — every spec drives the same single forklift, backend, and database.
 - Browser unit tests are QUnit modules in `webapp/test/unit/*.qunit.ts`, aggregated by `unitTests.qunit.ts` and executed inside `test/e2e/unit-suite.spec.ts`. **A new `*.qunit.ts` file only runs if it is imported from `unitTests.qunit.ts`.** `npm run test:unit` just serves them at <http://localhost:8081/test/unit/unitTests.qunit.html> for manual inspection.
 
+#### Handling-precision analysis
+
+Opt-in, needs the live stack, and never runs in CI:
+
+```powershell
+$env:E2E_BASE_URL="http://localhost:8080"; $env:E2E_VIDEO="on"
+npx playwright test test/e2e/forklift-precision.spec.ts
+node scripts/analyze-handling.mjs      # frames + fork-profile.txt in artifacts/handling
+```
+
+The spec records one pick-and-drop on an empty warehouse and writes `fork-samples.json` and `animation-telemetry.json` next to `video.webm`, all stamped with the page clock. `scripts/analyze-handling.mjs` pulls the frame for each handling event and prints the fork travel as a table.
+
+It also blacks out the viewport once and records the page time. Playwright starts recording before `performance.now()` begins, so without that marker every extracted frame lands 0.7–2 s early — measured, not theoretical. `E2E_ZOOM_STEPS` reframes the camera; zoom moves toward the building centre rather than the vehicle, so raising it can push the forklift out of shot.
+
 ### Running the stack
 
 ```powershell
