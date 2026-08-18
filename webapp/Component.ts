@@ -2,6 +2,19 @@ import UIComponent from "sap/ui/core/UIComponent";
 import JSONModel from "sap/ui/model/json/JSONModel";
 import { warehouseModelData } from "./model/warehouseData";
 import { emptyOrderInspection } from "./model/orderInspection";
+import { buildNarrative } from "./model/narrative";
+
+/**
+ * Story view is the default: the 3D warehouse plus one narrated line answers "what is
+ * happening?" on sight, and the full control tower stays one click away in Engineer view.
+ */
+function initialViewMode(): "STORY" | "ENGINEER" {
+  try {
+    return window.localStorage.getItem("warehouse.viewMode") === "ENGINEER" ? "ENGINEER" : "STORY";
+  } catch {
+    return "STORY";
+  }
+}
 
 /** @namespace warehouse.visualizer */
 export default class Component extends UIComponent {
@@ -13,6 +26,8 @@ export default class Component extends UIComponent {
     const model = new JSONModel({
       ...structuredClone(warehouseModelData),
       mode: "LIVE",
+      viewMode: initialViewMode(),
+      narrative: buildNarrative(null, null),
       connectionStatus: "CONNECTING",
       planningStatus: "READY",
       planningMessage: "",
@@ -46,6 +61,11 @@ export default class Component extends UIComponent {
       activeOrderCount: 0,
       queuedOrderCount: 0,
       attentionCount: 0,
+      allTransportOrders: [],
+      orderFilter: "ALL",
+      oldestQueuedLabel: "—",
+      oldestQueuedState: "None",
+      completedPerMinute: 0,
       activityText: "Waiting for a scenario to start.",
       agv: { id: "FL-01", status: "CONNECTING", battery: 0, velocity: 0, x: 8.2, z: -4.7, charging: false, handlingPhase: "IDLE", forkHeight: 0, forkExtension: 0 },
       warehouseName: "Linz Central Warehouse",

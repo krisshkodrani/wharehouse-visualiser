@@ -52,7 +52,6 @@ export interface WarehouseVisualConfig {
   cartons?: CartonVisualDefinition[];
   robotCells?: RobotCellVisualDefinition[];
   conveyorTransfers?: ConveyorVisualDefinition[];
-  fleetAgvs?: ApiAgv[];
   obstacles?: ObstacleDefinition[];
   inboundCount?: number;
   inboundLoads?: LoadVisualDefinition[];
@@ -86,7 +85,8 @@ export interface ApiAgv { id: string; x: number; z: number; theta: number; veloc
 export interface ApiJob { id: string; requestId: string; sequence: number; loadId: string; source: string; destination: string; status: string; route: string[]; }
 export interface ApiTransportTask { id: string; transportOrderId: string; sequence: number; loadId: string; source: string; destination: string; status: string; route: string[]; assignedAgvId?: string; acceptedAt?: string; startedAt?: string; completedAt?: string; error?: string; }
 export interface ApiVdaDispatch { id: string; taskId: string; manufacturer: string; serialNumber: string; orderId: string; orderUpdateId: number; status: string; valid: boolean; validationError?: string; rejectionError?: string; createdAt: string; publishedAt?: string; acceptedAt?: string; finishedAt?: string; payload: string; }
-export interface ApiTransportOrder { id: string; type: "PUTAWAY" | "OUTBOUND"; priority: "NORMAL" | "HIGH" | "URGENT"; status: string; objective?: string; scenarioId?: string; error?: string; createdAt: string; completedAt?: string; tasks: ApiTransportTask[]; vdaDispatches: ApiVdaDispatch[]; }
+export interface ApiExecutionEvent { id: string; transportOrderId: string; transportTaskId: string; vehicleId?: string; eventType: string; correlationId?: string; vdaOrderId?: string; orderUpdateId: number; occurredAt: string; description: string; }
+export interface ApiTransportOrder { id: string; type: "PUTAWAY" | "OUTBOUND"; priority: "NORMAL" | "HIGH" | "URGENT"; status: string; objective?: string; scenarioId?: string; error?: string; createdAt: string; completedAt?: string; tasks: ApiTransportTask[]; vdaDispatches: ApiVdaDispatch[]; executionEvents?: ApiExecutionEvent[]; }
 export interface ApiScenario { id?: string; name?: string; configured: boolean; }
 export interface ScenarioPreset { id: string; name: string; description: string; storedLoads: number; inboundLoads: number; orderType: string; orderLoads: number; priority: string; agvBattery: number; }
 export interface ApiRuntime { operationState: "RUNNING" | "PAUSED"; simulationEpoch: number; timeScale: 1 | 2 | 4; scenarioId?: string; scenarioConfigured: boolean; changedAt: string; }
@@ -95,4 +95,4 @@ export interface WarehouseSnapshot {
   id: string; name: string; width: number; depth: number; racks: ApiRack[]; locations: ApiLocation[]; loads: ApiLoad[]; agvs: ApiAgv[]; jobs: ApiJob[]; transportOrders: ApiTransportOrder[]; tasks: ApiTransportTask[]; scenario: ApiScenario;
   runtime: ApiRuntime; conveyorTransfers: ApiConveyorTransfer[]; obstacles?: ApiObstacle[]; cartons?: ApiCarton[]; robotCells?: ApiRobotCell[];
 }
-export interface WarehouseEvent { eventId: string; type: string; occurredAt: string; warehouseId: string; simulationEpoch: number; payload: unknown; }
+export interface WarehouseEvent { eventId: string; type: string; eventType?: string; occurredAt: string; warehouseId: string; simulationEpoch: number; entityId?: string; correlationId?: string; payloadVersion?: string; payload: unknown; }

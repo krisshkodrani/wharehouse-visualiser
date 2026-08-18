@@ -74,20 +74,12 @@ export default class WarehouseViewport extends Control {
     this.sceneController?.updateOperations(config);
   }
 
-  public moveForklift(): void {
-    this.sceneController?.moveForklift();
-  }
-
   public setAgvState(agv: ApiAgv): void {
     this.sceneController?.setAgvState(agv);
   }
 
   public setAgvOperations(agv: ApiAgv): void {
     this.sceneController?.setAgvOperations(agv);
-  }
-
-  public setSandboxMode(enabled: boolean): void {
-    this.sceneController?.setSandboxMode(enabled);
   }
 
   public exit(): void {

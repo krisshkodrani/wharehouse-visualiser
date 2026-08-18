@@ -41,10 +41,6 @@ export default class WarehouseApi {
     return this.post(`/api/v1/warehouses/linz/transport-orders/${orderId}/cancel`, {});
   }
 
-  public demoEvent(type: "VDA_REJECTION" | "BLOCK_ROUTE", taskId?: string): Promise<void> {
-    return this.post("/api/v1/demo/events", { type, taskId });
-  }
-
   public operation(command: "pause" | "resume" | "reset"): Promise<unknown> {
     return this.post(`/api/v1/warehouses/linz/operations/${command}`, {});
   }

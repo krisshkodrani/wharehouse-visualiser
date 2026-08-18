@@ -13,6 +13,16 @@ import { projectVisualConfig } from "../model/warehouseState";
 import { mergeAgvEvent } from "../model/agvState";
 import { buildOrderInspection, filterInspectionActivity } from "../model/orderInspection";
 import type { InspectionActivityFilter, OrderInspection, TaskInspection, VdaNavigatorItem, VdaSequenceRow } from "../model/orderInspection";
+import { buildNarrative } from "../model/narrative";
+
+/** Order statuses an operator has to act on. */
+const ATTENTION_STATUSES = ["FAILED", "REJECTED", "CANCELLED"];
+/** Rolling window used for the throughput KPI. */
+const THROUGHPUT_WINDOW_MS = 60_000;
+/** Remembers the presenter's density choice across the reload that a reset triggers. */
+const VIEW_MODE_KEY = "warehouse.viewMode";
+
+interface OrderRow { id: string; status: string; createdAt: string; completedAt?: string }
 
 /** @namespace warehouse.visualizer.controller */
 export default class MainController extends Controller {
@@ -86,8 +96,7 @@ export default class MainController extends Controller {
     } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
   }
 
-  public async onSpeedChange(event: Event): Promise<void> {
-    const multiplier = Number((event.getSource() as SegmentedButton).getSelectedKey()) as 1 | 2 | 4;
+  private async applySpeed(multiplier: 1 | 2 | 4): Promise<void> {
     try {
       await this.api.setSpeed(multiplier);
       this.model().setProperty("/timeScale", multiplier);
@@ -244,31 +253,34 @@ export default class MainController extends Controller {
     catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
   }
 
-  public async onDemoReject(): Promise<void> { await this.runDemoEvent("VDA_REJECTION"); }
-  public async onDemoBlock(): Promise<void> { await this.runDemoEvent("BLOCK_ROUTE"); }
-
-  public onDemoMenuItem(event: Event): void {
-    const parameters = event.getParameters() as { item?: { getKey: () => string } };
-    if (parameters.item?.getKey() === "reject") void this.onDemoReject();
-    if (parameters.item?.getKey() === "block") void this.onDemoBlock();
+  /** Single dispatch point for the Presenter menu, including its speed submenu. */
+  public onPresenterMenuItem(event: Event): void {
+    const key = (event.getParameters() as { item?: { getKey: () => string } }).item?.getKey();
+    switch (key) {
+      case "pause": void this.onToggleOperations(); break;
+      case "speed1": void this.applySpeed(1); break;
+      case "speed2": void this.applySpeed(2); break;
+      case "speed4": void this.applySpeed(4); break;
+      case "receive": this.onOpenReceive(); break;
+      case "reset": this.onResetSimulation(); break;
+      default: break;
+    }
   }
 
-  private async runDemoEvent(type: "VDA_REJECTION" | "BLOCK_ROUTE"): Promise<void> {
-    const order = this.model().getProperty("/selectedOrder") as ApiTransportOrder | null;
-    const taskId = order?.tasks.find((task) => ["DISPATCHED", "ACCEPTED", "EXECUTING"].includes(task.status))?.id;
-    try { await this.api.demoEvent(type, taskId); MessageToast.show(type === "VDA_REJECTION" ? "VDA rejection injected." : "Route blockage injected."); }
-    catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
+  /**
+   * Story view keeps the 3D warehouse and one narrated line; Engineer view restores the
+   * full control tower. Both render the same model, so switching cannot rebuild the scene.
+   */
+  public onToggleViewMode(): void {
+    const next = this.model().getProperty("/viewMode") === "STORY" ? "ENGINEER" : "STORY";
+    this.model().setProperty("/viewMode", next);
+    try { window.localStorage.setItem(VIEW_MODE_KEY, next); } catch { /* private browsing */ }
+    // The canvas needs no explicit resize: WarehouseViewport observes its own root with a
+    // ResizeObserver, so hiding a rail widens the stage and rescales the engine on its own.
   }
 
-  public onModeChange(event: Event): void {
-    const key = (event.getSource() as SegmentedButton).getSelectedKey();
-    const sandbox = key === "SANDBOX";
-    this.model().setProperty("/mode", key);
-    this.viewport()?.setSandboxMode(sandbox);
-    if (!sandbox) void this.loadSnapshot();
-  }
-
-  public onMoveForklift(): void { this.viewport()?.moveForklift(); }
+  public onOpenHowItWorks(): void { (this.byId("howItWorksDialog") as Dialog | undefined)?.open(); }
+  public onCloseHowItWorks(): void { (this.byId("howItWorksDialog") as Dialog | undefined)?.close(); }
 
   public onRackSelected(event: Event): void {
     const parameters = event.getParameters() as { rackId?: string; rackName?: string };
@@ -327,17 +339,28 @@ export default class MainController extends Controller {
       progress: order.tasks.length ? Math.round(order.tasks.filter((task) => task.status === "COMPLETED").length / order.tasks.length * 100) : 0,
       assignedAgv: order.tasks.find((task) => task.assignedAgvId)?.assignedAgvId ?? "Awaiting AGV"
     }));
-    model.setProperty("/transportOrders", orders);
+    model.setProperty("/allTransportOrders", orders);
     model.setProperty("/scenario", snapshot.scenario);
     model.setProperty("/activeOrderCount", orders.filter((order) => order.status === "IN_PROGRESS").length);
     model.setProperty("/queuedOrderCount", orders.filter((order) => ["PLANNING", "READY"].includes(order.status)).length);
-    model.setProperty("/attentionCount", orders.filter((order) => ["FAILED", "REJECTED"].includes(order.status)).length);
+    model.setProperty("/attentionCount", orders.filter((order) => ATTENTION_STATUSES.includes(order.status)).length);
+    this.applyOperationalKpis(orders);
+    this.applyOrderFilter();
     const selectedId = (model.getProperty("/selectedOrder") as ApiTransportOrder | null)?.id;
-    const selected = orders.find((order) => order.id === selectedId) ?? orders[0];
-    if (selected) this.selectOrder(selected);
-    else this.selectOrder(null);
-    model.setProperty("/agv", snapshot.agvs[0] || {});
+    const current = orders.find((order) => order.id === selectedId);
+    // Story view narrates whatever is live, so it follows the work rather than staying
+    // pinned to a completed order — a narration with no subject is worse than no narration.
+    // Engineer view keeps the operator's explicit choice.
+    const selected = model.getProperty("/viewMode") === "STORY"
+      ? this.mostRelevantOrder(orders) ?? current
+      : current ?? this.mostRelevantOrder(orders);
+    this.selectOrder(selected ?? null);
+    // Publish the merged vehicle, not the raw snapshot row: mergeAgvEvent above
+    // preserves live pose fields that the periodic snapshot would otherwise stamp
+    // backwards, undoing the interpolation.
+    model.setProperty("/agv", agv ?? {});
     model.setProperty("/activityText", this.activityText(snapshot));
+    this.applyNarrative();
     this.updateEligibleLoads();
     const selector = this.byId("inboundLoads") as MultiComboBox | undefined;
     selector?.setSelectedKeys(inbound.map((load) => load.id));
@@ -399,7 +422,6 @@ export default class MainController extends Controller {
         conveyorTransfers: (snapshot.conveyorTransfers ?? []).map((transfer) => ({
           id: transfer.id, cartonId: transfer.cartonId, loadId: transfer.loadId, status: transfer.status, conveyorId: transfer.conveyorId
         })),
-        fleetAgvs: snapshot.agvs,
         inboundCount: inbound.length,
         inboundLoads: inbound.map((load) => ({ id: load.id, item: load.item, status: load.status, locationId: load.locationId })),
         conveyorCount: conveyorLoads.length,
@@ -408,17 +430,19 @@ export default class MainController extends Controller {
         carriedLoadId: agv?.carriedLoadId,
         chargingStationId: agv?.charging ? agv.currentStationId : undefined
       };
+    // Structural allow-list. Only inputs that change the mesh graph belong here.
+    // Operational state (load, carton, robot, and conveyor status) must flow
+    // through the incremental syncs instead: a full setWarehouse() rebuilds every
+    // procedural texture and mesh, which destroys pose interpolation and every
+    // in-flight animation. Never widen this to spread `visual`.
     const signature = JSON.stringify({
-      ...visual,
-      inboundCount: undefined,
-      inboundLoads: undefined,
-      conveyorCount: undefined,
-      conveyorLoads: undefined,
-      loadDetails: undefined,
-      carriedLoadId: undefined,
-      chargingStationId: undefined,
-      fleetAgvs: undefined,
-      racks: visual.racks.map(({ emptySlots: _emptySlots, ...rack }) => rack)
+      id: visual.id,
+      racks: visual.racks.map((rack) => ({
+        id: rack.id, position: rack.position, rotationY: rack.rotationY, bays: rack.bays
+      })),
+      stations: visual.stations,
+      obstacles: visual.obstacles,
+      forkliftStops: visual.forkliftStops
     });
     if (!this.sceneConfigured || signature !== this.sceneSignature) {
       this.viewport()?.setWarehouse(visual);
@@ -439,18 +463,32 @@ export default class MainController extends Controller {
     if (event.simulationEpoch < this.simulationEpoch) return;
     if (event.type === "AGV_POSE" || event.type === "AGV_UPDATED" || event.type === "AGV_HANDLING_UPDATED") {
       const carriesLivePose = event.type === "AGV_POSE";
+      const update = event.payload as ApiAgv;
       const current = this.model().getProperty("/agv") as ApiAgv | undefined;
-      const agv = mergeAgvEvent(current, event.payload as ApiAgv, carriesLivePose);
+      // Single-vehicle fleet (see V20): ignore telemetry for any other vehicle
+      // rather than letting it overwrite FL-01's pose and the activity line.
+      if (update.id && current?.id && update.id !== current.id) return;
+      const agv = mergeAgvEvent(current, update, carriesLivePose);
       this.model().setProperty("/agv", agv);
       if (carriesLivePose) this.applyAgv(agv);
       else this.applyAgvOperations(agv);
       this.model().setProperty("/activityText", this.activityText(undefined, agv));
+      this.applyNarrative();
       return;
     }
-    if (event.type === "VDA_REJECTION" || event.type === "BLOCK_ROUTE") {
-      const payload = event.payload as { message?: string };
-      this.model().setProperty("/activityText", payload.message ?? event.type);
-      this.model().setProperty("/attentionCount", 1);
+    // A real protocol rejection: the backend refused an inbound VDA message before it could
+    // mutate any domain state. Surfacing it is the visible half of that guarantee, so it is
+    // reported immediately rather than waiting for the refresh below.
+    if (event.type === "AGV_MESSAGE_REJECTED") {
+      const payload = event.payload as { topic?: string; error?: string };
+      const kind = payload.topic?.slice(payload.topic.lastIndexOf("/") + 1) ?? "message";
+      const message = `Rejected an invalid ${kind} message: ${payload.error ?? "failed schema validation"}`;
+      this.model().setProperty("/activityText", message);
+      this.model().setProperty("/narrative/sentence", message);
+      this.model().setProperty("/narrative/exception", true);
+      // The count is derived from order status in applySnapshot; refresh rather
+      // than overwrite it with a literal, which used to strand it at 1.
+      this.scheduleRefresh(100);
       return;
     }
     if (event.type === "PUTAWAY_REJECTED") {
@@ -539,10 +577,67 @@ export default class MainController extends Controller {
     return control?.getBindingContext?.("warehouse")?.getObject();
   }
 
+  public onShowAttention(): void {
+    this.model().setProperty("/orderFilter", "ATTENTION");
+    this.applyOrderFilter();
+  }
+
+  public onClearOrderFilter(): void {
+    this.model().setProperty("/orderFilter", "ALL");
+    this.applyOrderFilter();
+  }
+
+  /** Derives the order list actually bound to the rail from the unfiltered set,
+   * so the attention filter survives snapshot refreshes. */
+  private applyOrderFilter(): void {
+    const model = this.model();
+    const all = (model.getProperty("/allTransportOrders") as OrderRow[] | undefined) ?? [];
+    const attentionOnly = model.getProperty("/orderFilter") === "ATTENTION";
+    model.setProperty("/transportOrders",
+      attentionOnly ? all.filter((order) => ATTENTION_STATUSES.includes(order.status)) : all);
+  }
+
+  /** Two numbers an operator can act on: how long the most patient queued order
+   * has been waiting, and how fast the facility is actually clearing work. */
+  private applyOperationalKpis(orders: OrderRow[]): void {
+    const model = this.model();
+    const now = Date.now();
+    const queuedAges = orders
+      .filter((order) => ["PLANNING", "READY"].includes(order.status))
+      .map((order) => now - new Date(order.createdAt).getTime())
+      .filter((age) => Number.isFinite(age));
+    const oldest = queuedAges.length > 0 ? Math.max(...queuedAges) : 0;
+    const oldestMinutes = Math.floor(oldest / 60_000);
+    model.setProperty("/oldestQueuedLabel", queuedAges.length === 0
+      ? "—"
+      : oldestMinutes > 0 ? `${oldestMinutes}m` : `${Math.floor(oldest / 1000)}s`);
+    model.setProperty("/oldestQueuedState",
+      oldestMinutes >= 5 ? "Error" : oldestMinutes >= 2 ? "Warning" : "None");
+    const completedRecently = orders.filter((order) =>
+      order.completedAt && now - new Date(order.completedAt).getTime() <= THROUGHPUT_WINDOW_MS).length;
+    model.setProperty("/completedPerMinute", completedRecently);
+  }
+
   private updateEligibleLoads(): void {
     const model = this.model();
     const type = String(model.getProperty("/orderType"));
     model.setProperty("/eligibleLoads", type === "OUTBOUND" ? model.getProperty("/storedLoads") : model.getProperty("/inboundLoads"));
+  }
+
+  /** Recomputes the story-view narration from whatever is already in the model. */
+  private applyNarrative(): void {
+    const model = this.model();
+    const agv = model.getProperty("/agv") as ApiAgv | undefined;
+    const order = model.getProperty("/selectedOrder") as ApiTransportOrder | null;
+    model.setProperty("/narrative", buildNarrative(agv, order));
+  }
+
+  /** The order worth narrating: live work first, then anything broken, then queued. */
+  private mostRelevantOrder<T extends { status: string }>(orders: T[]): T | undefined {
+    return orders.find((order) => order.status === "IN_PROGRESS")
+      ?? orders.find((order) => ATTENTION_STATUSES.includes(order.status))
+      ?? orders.find((order) => ["PLANNING", "READY"].includes(order.status))
+      ?? orders[0];
   }
 
   private activityText(snapshot?: WarehouseSnapshot, agvOverride?: ApiAgv): string {

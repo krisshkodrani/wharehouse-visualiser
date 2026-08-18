@@ -11,32 +11,45 @@
         <ToolbarSpacer />
         <ObjectStatus text="{warehouse>/connectionStatus}" icon="sap-icon://connected"
           state="{= ${warehouse>/connectionStatus} === 'CONNECTED' ? 'Success' : 'Warning' }" />
-        <ObjectStatus title="Vehicle" text="{= ${warehouse>/agv/id} + ' · ' + ${warehouse>/agv/status} }" icon="sap-icon://shipping-status"
-          state="{= ${warehouse>/agv/status} === 'MOVING' ? 'Information' : 'Success' }" />
-        <ProgressIndicator width="6rem" percentValue="{warehouse>/agv/battery}" displayValue="{= Math.round(${warehouse>/agv/battery}) + '%' }" state="Success" />
-        <Button text="Receive inventory" icon="sap-icon://add-product" press=".onOpenReceive" />
-        <Button text="{= ${warehouse>/operationState} === 'PAUSED' ? 'Resume fleet' : 'Pause fleet' }"
-          icon="{= ${warehouse>/operationState} === 'PAUSED' ? 'sap-icon://media-play' : 'sap-icon://media-pause' }" press=".onToggleOperations" />
-        <MenuButton text="Demo tools" icon="sap-icon://activate">
-          <menu><Menu itemSelected=".onDemoMenuItem"><items>
-            <MenuItem text="Inject VDA rejection" key="reject" icon="sap-icon://error" />
-            <MenuItem text="Block selected route" key="block" icon="sap-icon://road" />
+        <ObjectStatus title="Vehicle" text="{= ${warehouse>/agv/id} + ' · ' + (${warehouse>/agv/status} || '').replace('_', ' ') }" icon="sap-icon://shipping-status"
+          state="{= ${warehouse>/agv/status} === 'FAULT' ? 'Error' : ${warehouse>/agv/status} === 'MOVING' ? 'Information' : ${warehouse>/agv/status} === 'CHARGING' ? 'Warning' : 'Success' }" />
+        <ProgressIndicator width="6rem" percentValue="{warehouse>/agv/battery}" displayValue="{= Math.round(${warehouse>/agv/battery}) + '%' }"
+          state="{= ${warehouse>/agv/battery} &lt; 25 ? 'Error' : ${warehouse>/agv/battery} &lt; 40 ? 'Warning' : 'Success' }" />
+        <Button text="New transport order" icon="sap-icon://add" type="Emphasized" press=".onOpenTransportOrder" />
+        <!-- Everything a presenter needs mid-demo, kept out of the operator's line of sight.
+             Reset and simulation speed live here because story view hides the order rail
+             footer that used to own them. -->
+        <MenuButton text="Presenter" icon="sap-icon://action-settings">
+          <menu><Menu itemSelected=".onPresenterMenuItem"><items>
+            <MenuItem text="{= ${warehouse>/operationState} === 'PAUSED' ? 'Resume fleet' : 'Pause fleet' }" key="pause"
+              icon="{= ${warehouse>/operationState} === 'PAUSED' ? 'sap-icon://media-play' : 'sap-icon://media-pause' }" />
+            <MenuItem text="Simulation speed" key="speed" icon="sap-icon://fast-forward">
+              <items>
+                <MenuItem text="{= ${warehouse>/timeScale} === 1 ? '1x  ·  active' : '1x' }" key="speed1" />
+                <MenuItem text="{= ${warehouse>/timeScale} === 2 ? '2x  ·  active' : '2x' }" key="speed2" />
+                <MenuItem text="{= ${warehouse>/timeScale} === 4 ? '4x  ·  active' : '4x' }" key="speed4" />
+              </items>
+            </MenuItem>
+            <MenuItem text="Receive inventory" key="receive" icon="sap-icon://add-product" startsSection="true" />
+            <MenuItem text="Reset scenario" key="reset" icon="sap-icon://refresh" />
           </items></Menu></menu>
         </MenuButton>
-        <Button text="New transport order" icon="sap-icon://add" type="Emphasized" press=".onOpenTransportOrder" />
+        <Button icon="sap-icon://hint" tooltip="How this works" press=".onOpenHowItWorks" />
+        <Button icon="sap-icon://switch-views" press=".onToggleViewMode"
+          text="{= ${warehouse>/viewMode} === 'STORY' ? 'Engineer view' : 'Story view' }"
+          tooltip="Switch between the narrated overview and the full control tower" />
       </OverflowToolbar>
 
       <HBox fitContainer="true" renderType="Bare" class="towerWorkspace">
-        <VBox width="19rem" renderType="Bare" class="orderRail">
+        <VBox width="19rem" renderType="Bare" class="orderRail" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
           <HBox justifyContent="SpaceBetween" alignItems="Center" class="railHeading">
             <VBox><Title text="Transport orders" level="H2" /><Text text="Business intent and execution" /></VBox>
-            <ObjectNumber number="{= ${warehouse>/transportOrders}.length }" unit="total" />
+            <ObjectNumber number="{= ${warehouse>/transportOrders}.length }" unit="{= ${warehouse>/orderFilter} === 'ATTENTION' ? 'flagged' : 'total' }" />
           </HBox>
-          <HBox class="orderMetrics">
-            <VBox><ObjectNumber number="{warehouse>/activeOrderCount}" state="Information" /><Text text="Active" /></VBox>
-            <VBox><ObjectNumber number="{warehouse>/queuedOrderCount}" /><Text text="Queued" /></VBox>
-            <VBox><ObjectNumber number="{warehouse>/attentionCount}" state="Error" /><Text text="Attention" /></VBox>
-          </HBox>
+          <MessageStrip visible="{= ${warehouse>/orderFilter} === 'ATTENTION' }" type="Error" showIcon="true"
+            text="Showing only orders that need attention." class="orderFilterStrip">
+            <link><Link text="Show all" press=".onClearOrderFilter" /></link>
+          </MessageStrip>
           <List id="transportOrderList" items="{warehouse>/transportOrders}" itemPress=".onOrderPress" noDataText="No transport orders yet" showSeparators="None" class="transportOrderList">
             <CustomListItem type="Active">
               <VBox class="orderCard">
@@ -50,31 +63,31 @@
               </VBox>
             </CustomListItem>
           </List>
-          <VBox class="railFooter">
-            <Button text="Reset scenario" icon="sap-icon://refresh" type="Transparent" press=".onResetSimulation" />
-            <HBox alignItems="Center" justifyContent="SpaceBetween">
-              <Label text="Simulation speed" labelFor="speedSelector" />
-              <SegmentedButton id="speedSelector" selectedKey="{warehouse>/timeScale}" selectionChange=".onSpeedChange">
-                <items><SegmentedButtonItem key="1" text="1x" /><SegmentedButtonItem key="2" text="2x" /><SegmentedButtonItem key="4" text="4x" /></items>
-              </SegmentedButton>
-            </HBox>
-          </VBox>
         </VBox>
 
         <VBox renderType="Bare" class="mapStage">
           <HBox class="mapOverlay" justifyContent="SpaceBetween" alignItems="Start">
-            <VBox class="floatingCard"><Title text="Live warehouse" level="H3" /><Text text="{= ${warehouse>/selectedOrder/shortId} ? 'Selected TO-' + ${warehouse>/selectedOrder/shortId} : 'Select an order to inspect its route' }" /></VBox>
-            <HBox class="mapKpis">
-              <VBox class="floatingCard compactKpi"><ObjectNumber number="1" unit="/ 1" /><Text text="AGVs online" /></VBox>
+            <VBox class="floatingCard">
+              <Title text="Live warehouse" level="H3" />
+              <Text text="{= ${warehouse>/selectedOrder/shortId}
+                ? (${warehouse>/viewMode} === 'STORY' ? 'Following TO-' : 'Selected TO-') + ${warehouse>/selectedOrder/shortId}
+                : (${warehouse>/viewMode} === 'STORY' ? 'Waiting for the first transport order' : 'Select an order to inspect its route') }" />
+              <Text text="Drag to orbit · WASD to pan · scroll to zoom" class="viewportHint" />
+            </VBox>
+            <HBox class="mapKpis" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
               <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/queuedOrderCount}" /><Text text="Queued" /></VBox>
-              <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/attentionCount}" state="Error" /><Text text="Attention" /></VBox>
+              <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/oldestQueuedLabel}" state="{warehouse>/oldestQueuedState}" /><Text text="Longest wait" /></VBox>
+              <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/completedPerMinute}" unit="/min" state="Information" /><Text text="Throughput" /></VBox>
+              <VBox class="floatingCard compactKpi kpiActionable" tooltip="Show only orders needing attention">
+                <ObjectNumber number="{warehouse>/attentionCount}" state="{= ${warehouse>/attentionCount} > 0 ? 'Error' : 'None' }" />
+                <Link text="Attention" press=".onShowAttention" enabled="{= ${warehouse>/attentionCount} > 0 }" />
+              </VBox>
             </HBox>
           </HBox>
           <warehouse:WarehouseViewport id="viewport" rackSelected=".onRackSelected" class="warehouseViewport" />
-          <HBox class="routeLegend"><Text text="━ Released base" /><Text text="┅ Horizon" /></HBox>
         </VBox>
 
-        <VBox width="27rem" renderType="Bare" class="orderDetail executionPanel">
+        <VBox width="27rem" renderType="Bare" class="orderDetail executionPanel" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
           <VBox class="detailHeader executionHeader">
             <HBox justifyContent="SpaceBetween" alignItems="Start">
               <VBox>
@@ -164,11 +177,36 @@
         </VBox>
       </HBox>
 
-      <Toolbar class="activityStrip">
+      <!-- Story view: what is happening, where it is in the process, and one line of
+           protocol evidence. Three lines replace the two rails a viewer had to read. -->
+      <VBox class="narrativeBar" visible="{= ${warehouse>/viewMode} === 'STORY' }">
+        <HBox class="narrativeNow" alignItems="Center" justifyContent="SpaceBetween">
+          <HBox alignItems="Center" class="narrativeNowText">
+            <ObjectStatus text="{= ${warehouse>/narrative/exception} ? 'ISSUE' : 'NOW' }"
+              state="{= ${warehouse>/narrative/exception} ? 'Error' : 'Success' }" inverted="true" />
+            <Text text="{warehouse>/narrative/sentence}" class="narrativeSentence" />
+          </HBox>
+          <Text text="{= (${warehouse>/agv/velocity} || 0).toFixed(1) + ' m/s · fork ' + (${warehouse>/agv/forkHeight} || 0).toFixed(2) + ' m' }"
+            class="narrativeTelemetry" />
+        </HBox>
+        <HBox class="narrativeProgress" alignItems="Center" justifyContent="SpaceBetween">
+          <!-- Bare render type keeps each stage a direct child, so the CSS chevron
+               separator between stages has something to attach to. -->
+          <HBox class="pipelineStrip" alignItems="Center" renderType="Bare" items="{warehouse>/narrative/steps}">
+            <ObjectStatus class="pipelineStep" text="{warehouse>label}"
+              icon="{= ${warehouse>state} === 'DONE' ? 'sap-icon://accept' : ${warehouse>state} === 'CURRENT' ? 'sap-icon://play' : 'sap-icon://circle-task' }"
+              state="{= ${warehouse>state} === 'DONE' ? 'Success' : ${warehouse>state} === 'CURRENT' ? 'Information' : 'None' }"
+              inverted="{= ${warehouse>state} === 'CURRENT' }" />
+          </HBox>
+          <Text text="{warehouse>/narrative/proofLine}" class="narrativeProof" />
+        </HBox>
+      </VBox>
+
+      <Toolbar class="activityStrip" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
         <ObjectStatus text="LIVE" state="Success" inverted="true" />
         <Text text="{warehouse>/activityText}" />
         <ToolbarSpacer />
-        <Text text="{= ${warehouse>/agv/velocity} + ' m/s · fork ' + ${warehouse>/agv/forkHeight} + ' m' }" />
+        <Text text="{= (${warehouse>/agv/velocity} || 0).toFixed(1) + ' m/s · fork ' + (${warehouse>/agv/forkHeight} || 0).toFixed(2) + ' m' }" />
       </Toolbar>
     </VBox>
   </Page>
@@ -266,6 +304,43 @@
         </VBox>
       </HBox>
     </content>
+  </Dialog>
+
+  <Dialog id="howItWorksDialog" title="How this works" contentWidth="58rem" stretchOnPhone="true" class="howItWorksDialog">
+    <VBox class="howItWorksContent">
+      <Text text="An operator asks for a load to move. Six steps later a real vehicle protocol has carried it out, and the 3D view is only reporting what happened." class="howItWorksLead" />
+      <HBox wrap="Wrap" class="howItWorksGrid">
+        <VBox class="howStep">
+          <HBox alignItems="Center" class="howStepHead"><Text text="1" class="howStepNumber" /><Title text="Operator intent" level="H4" /></HBox>
+          <Text text="A transport order is created over REST with an idempotency key, so a retry can never duplicate the work." wrapping="true" />
+        </VBox>
+        <VBox class="howStep">
+          <HBox alignItems="Center" class="howStepHead"><Text text="2" class="howStepNumber" /><Title text="Planning" level="H4" /></HBox>
+          <Text text="The backend splits the order into independently schedulable load movements and routes each one across the warehouse graph with A*." wrapping="true" />
+        </VBox>
+        <VBox class="howStep">
+          <HBox alignItems="Center" class="howStepHead"><Text text="3" class="howStepNumber" /><Title text="One commit" level="H4" /></HBox>
+          <Text text="Order, tasks, reservations and an outbox record commit in a single PostgreSQL transaction. Nothing is dispatched that was not durably recorded first." wrapping="true" />
+        </VBox>
+        <VBox class="howStep">
+          <HBox alignItems="Center" class="howStepHead"><Text text="4" class="howStepNumber" /><Title text="Dispatch" level="H4" /></HBox>
+          <Text text="The outbox publishes a schema-validated VDA 5050 v3.0.0 order over MQTT. Invalid messages are rejected before they can reach a vehicle." wrapping="true" />
+        </VBox>
+        <VBox class="howStep">
+          <HBox alignItems="Center" class="howStepHead"><Text text="5" class="howStepNumber" /><Title text="Execution" level="H4" /></HBox>
+          <Text text="The forklift is a separate process that behaves like real hardware. It accepts the order, drives the nodes and edges, runs the pick and drop actions, and reports state plus 20 Hz pose telemetry back." wrapping="true" />
+        </VBox>
+        <VBox class="howStep">
+          <HBox alignItems="Center" class="howStepHead"><Text text="6" class="howStepNumber" /><Title text="Projection" level="H4" /></HBox>
+          <Text text="The backend validates and persists what the vehicle reported, then pushes typed events to this browser. The 3D scene interpolates the pose — it visualises state, it never decides it." wrapping="true" />
+        </VBox>
+      </HBox>
+      <MessageStrip type="Information" showIcon="true"
+        text="Commands and telemetry are handled differently on purpose: losing an intermediate pose is acceptable, losing a command is not." />
+      <Text class="howItWorksCaveat" wrapping="true"
+        text="This is a reference implementation for design discussion. It is not VDA-certified, not a functional-safety component, and not a production deployment." />
+    </VBox>
+    <endButton><Button text="Close" press=".onCloseHowItWorks" /></endButton>
   </Dialog>
 
   <Dialog id="seedDialog" showHeader="false" contentWidth="54rem" stretchOnPhone="true" class="seedDialog">

@@ -7,6 +7,8 @@ import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { TransformNode as TransformNodeType } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene as SceneType } from "@babylonjs/core/scene";
 import type { ApiAgv, ConveyorVisualDefinition, LoadVisualDefinition, ObstacleDefinition, RackDefinition, RobotCellVisualDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
+import { maximumReach, requiredReach, solveArmPose } from "./armKinematics";
+import type { ArmGeometry, ArmPose } from "./armKinematics";
 
 const {
   ActionManager,
@@ -57,13 +59,49 @@ interface PoseSample { receivedAt: number; x: number; z: number; theta: number; 
 // Double both dimensions to provide four times the original floor area.
 const FLOOR_HALF_WIDTH = 24;
 const FLOOR_HALF_DEPTH = 18;
+/** Collision radius used to detect the live vehicle overlapping rack geometry. */
 const FORKLIFT_RADIUS = 0.72;
 const MAX_FORK_HEIGHT = 2.75;
-const OUTBOUND_CONVEYOR_START = -2.2;
-const OUTBOUND_CONVEYOR_END = 8.2;
-const OUTBOUND_CONVEYOR_LENGTH = OUTBOUND_CONVEYOR_END - OUTBOUND_CONVEYOR_START;
-const OUTBOUND_CONVEYOR_CENTER = (OUTBOUND_CONVEYOR_START + OUTBOUND_CONVEYOR_END) / 2;
-const OUTBOUND_CONVEYOR_LANES = [-0.78, 0.78];
+/** WASD pans the camera. Fractions of the orbit radius travelled per second, so the pan
+ * feels the same when zoomed into an aisle as when viewing the whole facility: roughly
+ * 2.8 m/s fully zoomed in and 18 m/s fully out. Tuned down from 0.55, which crossed the
+ * whole 48 m floor in under three seconds and was impossible to aim while presenting. */
+const CAMERA_PAN_RATE = 0.28;
+const CAMERA_PAN_KEYS = ["KeyW", "KeyA", "KeyS", "KeyD"];
+/** Shared by the initial build and the incremental sync. These used to disagree
+ * (8 vs 4), so cartons appeared on first build and vanished on the next sync. */
+const CONVEYOR_CARGO_LIMIT = 8;
+
+// Robot arm link geometry. Reach from the shoulder is UPPER + FOREARM = 2.90 m.
+// The arm has to serve two points 5.1 m apart: the handoff pad at cell-local +0.5
+// and the conveyor infeed CONVEYOR_INFEED_INSET in from each lane's upstream end.
+// With the V21 layout those are 2.60 m and 2.82 m from the pedestal. The margin is
+// thin, so changing any length, the pedestal offset, the pad offset, the inset, or
+// the lane geometry in V21 needs armKinematics.qunit.ts re-checked: an unreachable
+// target does not fail loudly, the IK clamps and the gripper quietly stops short.
+const ARM_UPPER_LENGTH = 1.55;
+const ARM_FOREARM_LENGTH = 1.35;
+const ARM_GRIPPER_LENGTH = .3;
+const ARM_SHOULDER_HEIGHT = .95;
+/** Pedestal and handoff pad, in cell-local coordinates. */
+const ARM_PEDESTAL_LOCAL_X = -2.0;
+const ROBOT_HANDOFF_LOCAL_X = .5;
+/** How far in from a lane's upstream end cargo is placed and picked up. Shared by
+ * the arm's placing target and addConveyorCargo so the gripper releases exactly
+ * where the carton appears. */
+const CONVEYOR_INFEED_INSET = .7;
+
+/** Reused every frame by the camera pan; allocating these per frame would churn the GC. */
+const FORWARD_AXIS = new Vector3(0, 0, 1);
+const RIGHT_AXIS = new Vector3(1, 0, 0);
+
+const ARM_GEOMETRY: ArmGeometry = {
+  upperLength: ARM_UPPER_LENGTH,
+  forearmLength: ARM_FOREARM_LENGTH,
+  gripperLength: ARM_GRIPPER_LENGTH,
+  shoulderHeight: ARM_SHOULDER_HEIGHT,
+  pedestalLocalX: ARM_PEDESTAL_LOCAL_X
+};
 
 export default class WarehouseScene {
   private readonly engine: EngineType;
@@ -77,30 +115,32 @@ export default class WarehouseScene {
   private readonly wheelMeshes: Mesh[] = [];
   private forkliftForkAssembly?: TransformNodeType;
   private readonly chargingIndicators = new Map<string, StandardMaterialType>();
-  private sandboxMode = false;
   private readonly pressedKeys = new Set<string>();
-  private manualControlActive = false;
-  private collisionBlocked = false;
   private readonly rackColliders: RackCollider[] = [];
   private readonly cargoItems: CargoItem[] = [];
   private readonly inboundCargoItems: CargoItem[] = [];
   private readonly conveyorCargoItems: CargoItem[] = [];
-  private readonly companionAgvs = new Map<string, TransformNodeType>();
   private robotCellRoot?: TransformNodeType;
-  private robotArm?: TransformNodeType;
-  private robotGripper?: TransformNodeType;
+  private robotCellStation?: StationDefinition;
+  private armYaw?: TransformNodeType;
+  private armShoulder?: TransformNodeType;
+  private armElbow?: TransformNodeType;
+  private armWrist?: TransformNodeType;
+  private handoffPallet?: TransformNodeType;
+  private grippedCarton?: Mesh;
   private carriedCargo?: CargoItem;
   private inboundCardboardMaterial?: StandardMaterialType;
   private inboundPalletMaterial?: StandardMaterialType;
   private conveyorCardboardMaterial?: StandardMaterialType;
   private inboundStation?: StationDefinition;
-  private outboundStation?: StationDefinition;
+  private defaultConveyorLane?: StationDefinition;
+  private readonly conveyorStations = new Map<string, StationDefinition>();
   private forkliftStops?: [Vector3Type, Vector3Type];
-  private nextForkliftStop = 1;
   private selectedRackId?: string;
   private readonly rackParts = new Map<string, RackParts>();
   private highlightMaterial?: StandardMaterialType;
   private lastPoseTelemetryAt = 0;
+  private lastCameraTelemetryAt = 0;
   private liveMotionBlocked = false;
   private robotCellPhase = "IDLE";
 
@@ -158,15 +198,15 @@ export default class WarehouseScene {
       this.createRack(rack, config.accentColor);
     }
     for (const obstacle of config.obstacles ?? []) this.createObstacle(obstacle);
-    this.createParkingAreas(config.stations?.filter((station) => station.type === "PARKING_CHARGING" || station.type === "CHARGING_AREA") ?? []);
+    this.createParkingAreas(config.stations?.filter((station) => station.type === "PARKING_CHARGING") ?? []);
     this.createSign(config.signText, config.accentColor);
     this.createInboundStaging(inboundStation, config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
-    this.createOutboundConveyor(outboundStation, config.conveyorLoads ?? [], config.conveyorTransfers ?? []);
-    this.createRobotCell(outboundStation, config.robotCells ?? []);
+    this.createOutboundConveyors(config.stations?.filter((station) => station.type === "CONVEYOR") ?? [], config.conveyorLoads ?? [], config.conveyorTransfers ?? []);
+    const robotStation = config.stations?.find((station) => station.type === "ROBOT_CELL");
+    if (robotStation) this.createRobotCell(robotStation, config.robotCells ?? [], config.conveyorTransfers ?? []);
+    this.createAuxiliaryStations(config.stations ?? []);
     this.forkliftStops = [Vector3.FromArray(config.forkliftStops[0]), Vector3.FromArray(config.forkliftStops[1])];
-    this.nextForkliftStop = 1;
     this.createForklift(previousForkliftPosition ?? this.forkliftStops[0], config.accentColor);
-    this.createCompanionAgvs(config.fleetAgvs ?? []);
     if (previousForkliftRotation !== undefined && this.forklift) this.forklift.rotation.y = previousForkliftRotation;
     if (config.carriedLoadId) this.createLiveCarriedCargo(config.carriedLoadId);
     this.updateChargingIndicators(config.chargingStationId);
@@ -184,53 +224,12 @@ export default class WarehouseScene {
     this.syncCarriedCargo(config.carriedLoadId);
     this.syncRackCargo(config.racks);
     this.syncInboundCargo(config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
-    this.syncConveyorCargo(config.conveyorLoads ?? []);
-    this.syncRobotCell(config.robotCells ?? []);
-    this.syncCompanionAgvs(config.fleetAgvs ?? []);
+    this.syncConveyorCargo(config.conveyorLoads ?? [], config.conveyorTransfers ?? []);
+    this.syncRobotCell(config.robotCells ?? [], config.conveyorTransfers ?? []);
     this.updateChargingIndicators(config.chargingStationId);
   }
 
-  public moveForklift(): void {
-    if (!this.sandboxMode || !this.forklift || !this.forkliftStops) {
-      return;
-    }
-    this.scene.stopAnimation(this.forklift);
-    if (this.forkliftLift) {
-      this.scene.stopAnimation(this.forkliftLift);
-    }
-    const destinationIndex = this.nextForkliftStop;
-    const start = this.forklift.position.clone();
-    const end = this.forkliftStops[destinationIndex].clone();
-    const animation = new Animation("forkliftMove", "position", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animation.setKeys([{ frame: 0, value: start }, { frame: 90, value: end }]);
-    const easing = new CubicEase();
-    easing.setEasingMode(EasingFunction.EASINGMODE_EASEINOUT);
-    animation.setEasingFunction(easing);
-    this.forklift.rotation.y = end.z >= start.z ? Math.PI : 0;
-    if (this.forkliftLift) {
-      const liftAnimation = new Animation("forkliftLift", "position.y", 60, Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
-      liftAnimation.setKeys([
-        { frame: 0, value: this.forkliftLift.position.y },
-        { frame: 22, value: 1.6 },
-        { frame: 68, value: 1.6 },
-        { frame: 90, value: 0 }
-      ]);
-      liftAnimation.setEasingFunction(easing);
-      const lift = this.forkliftLift;
-      this.log(`forks lifting from ${lift.position.y.toFixed(2)}`);
-      this.scene.beginDirectAnimation(lift, [liftAnimation], 0, 90, false, 1, () => {
-        this.log(`forks lowered to ${lift.position.y.toFixed(2)}`);
-      });
-    }
-    this.log(`forklift moving from ${this.formatPosition(start)} to ${this.formatPosition(end)}`);
-    this.scene.beginDirectAnimation(this.forklift, [animation], 0, 90, false, 1, () => {
-      this.log(`forklift arrived at ${this.formatPosition(end)}`);
-    });
-    this.nextForkliftStop = destinationIndex === 0 ? 1 : 0;
-  }
-
   public setAgvState(agv: ApiAgv): void {
-    if (this.sandboxMode) return;
     this.setAgvOperations(agv);
     const sample = { receivedAt: performance.now(), x: agv.x, z: agv.z, theta: -agv.theta - Math.PI / 2, velocity: agv.velocity ?? 0 };
     const previous = this.poseBuffer.at(-1);
@@ -247,17 +246,10 @@ export default class WarehouseScene {
   }
 
   public setAgvOperations(agv: ApiAgv): void {
-    if (this.sandboxMode) return;
     this.syncCarriedCargo(agv.carriedLoadId);
     this.updateChargingIndicators(agv.charging ? agv.currentStationId : undefined);
     if (this.forkliftLift) this.forkliftLift.position.y = Math.max(0, Math.min(MAX_FORK_HEIGHT, agv.forkHeight ?? 0));
     if (this.forkliftForkAssembly) this.forkliftForkAssembly.position.z = -Math.max(0, Math.min(.7, agv.forkExtension ?? 0));
-  }
-
-  public setSandboxMode(enabled: boolean): void {
-    this.sandboxMode = enabled;
-    this.pressedKeys.clear();
-    this.manualControlActive = false;
   }
 
   public resize(): void {
@@ -415,79 +407,62 @@ export default class WarehouseScene {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.sandboxMode || !this.isControlKey(event.code) || this.isEditingTarget(event.target)) {
-      return;
-    }
+    if (!this.isControlKey(event.code) || this.isEditingTarget(event.target)) return;
     event.preventDefault();
-    const firstPress = !this.pressedKeys.has(event.code);
-    if (firstPress) {
-      this.log(`manual control engaged: ${event.code}`);
-    }
     this.pressedKeys.add(event.code);
-    if (firstPress && event.code === "KeyE") {
-      this.toggleCargo();
-    }
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
-    if (!this.isControlKey(event.code)) {
-      return;
-    }
+    if (!this.isControlKey(event.code)) return;
     event.preventDefault();
     this.pressedKeys.delete(event.code);
-    if (this.forklift && this.forkliftLift) {
-      this.log(`manual state position ${this.formatPosition(this.forklift.position)}; heading ${this.forklift.rotation.y.toFixed(2)}; forks ${this.forkliftLift.position.y.toFixed(2)}`);
-    }
   };
 
   private readonly onWindowBlur = (): void => {
     this.pressedKeys.clear();
   };
 
-  private readonly updateManualControls = (): void => {
-    if (!this.forklift || !this.forkliftLift || this.pressedKeys.size === 0) {
-      this.manualControlActive = false;
-      return;
-    }
-    if (!this.manualControlActive) {
-      this.scene.stopAnimation(this.forklift);
-      this.scene.stopAnimation(this.forkliftLift);
-      this.manualControlActive = true;
-    }
+  /**
+   * Pans the orbit camera with WASD, in the directions the viewer sees rather than world
+   * axes, so W always moves away from the viewer whatever the current orbit angle.
+   *
+   * Speed scales with zoom distance: at 10 m a 12 m/s pan would overshoot the whole aisle,
+   * and at 65 m it would feel stuck. The target is clamped to the floor so panning cannot
+   * strand the camera looking at empty space.
+   */
+  private readonly updateCameraPan = (): void => {
+    const strafe = (this.pressedKeys.has("KeyD") ? 1 : 0) - (this.pressedKeys.has("KeyA") ? 1 : 0);
+    const advance = (this.pressedKeys.has("KeyW") ? 1 : 0) - (this.pressedKeys.has("KeyS") ? 1 : 0);
+    if (strafe === 0 && advance === 0) return;
+
+    // getDirection resolves the camera's own axes in world space, which keeps this correct
+    // in Babylon's left-handed system without re-deriving it from alpha and beta.
+    const forward = this.camera.getDirection(FORWARD_AXIS);
+    const right = this.camera.getDirection(RIGHT_AXIS);
+    let x = forward.x * advance + right.x * strafe;
+    let z = forward.z * advance + right.z * strafe;
+    const length = Math.hypot(x, z);
+    if (length < 1e-4) return;
 
     const seconds = Math.min(this.engine.getDeltaTime(), 50) / 1000;
-    const steering = (this.pressedKeys.has("KeyD") ? 1 : 0) - (this.pressedKeys.has("KeyA") ? 1 : 0);
-    const throttle = (this.pressedKeys.has("KeyW") ? 1 : 0) - (this.pressedKeys.has("KeyS") ? 1 : 0);
-    this.forklift.rotation.y += steering * 1.75 * seconds;
-    if (throttle !== 0) {
-      const distance = throttle * 2.4 * seconds;
-      const nextX = Math.max(-FLOOR_HALF_WIDTH + FORKLIFT_RADIUS, Math.min(FLOOR_HALF_WIDTH - FORKLIFT_RADIUS,
-        this.forklift.position.x - Math.sin(this.forklift.rotation.y) * distance));
-      const nextZ = Math.max(-FLOOR_HALF_DEPTH + FORKLIFT_RADIUS, Math.min(FLOOR_HALF_DEPTH - FORKLIFT_RADIUS,
-        this.forklift.position.z - Math.cos(this.forklift.rotation.y) * distance));
-      if (!this.collidesWithRack(nextX, nextZ)) {
-        this.forklift.position.x = nextX;
-        this.forklift.position.z = nextZ;
-        this.collisionBlocked = false;
-      } else if (!this.collisionBlocked) {
-        this.log("rack collision blocked forklift movement");
-        this.collisionBlocked = true;
-      }
-    } else {
-      this.collisionBlocked = false;
-    }
+    const metres = this.camera.radius * CAMERA_PAN_RATE * seconds;
+    x = (x / length) * metres;
+    z = (z / length) * metres;
 
-    const liftDirection = (this.pressedKeys.has("KeyF") ? 1 : 0) - (this.pressedKeys.has("KeyC") ? 1 : 0);
-    if (liftDirection !== 0) {
-      this.forkliftLift.position.y = Math.max(0, Math.min(MAX_FORK_HEIGHT, this.forkliftLift.position.y + liftDirection * 0.95 * seconds));
+    const target = this.camera.target;
+    target.x = Math.max(-FLOOR_HALF_WIDTH, Math.min(FLOOR_HALF_WIDTH, target.x + x));
+    target.z = Math.max(-FLOOR_HALF_DEPTH, Math.min(FLOOR_HALF_DEPTH, target.z + z));
+
+    // Throttled so a held key cannot flood the 500-entry telemetry ring.
+    const now = performance.now();
+    if (now - this.lastCameraTelemetryAt >= 250) {
+      this.lastCameraTelemetryAt = now;
+      this.telemetry("CAMERA_PANNED", { x: Number(target.x.toFixed(2)), z: Number(target.z.toFixed(2)) });
     }
   };
 
   private readonly updateFrame = (): void => {
-    if (this.sandboxMode) {
-      this.updateManualControls();
-      return;
-    }
+    this.updateCameraPan();
     if (!this.forklift || this.poseBuffer.length === 0) return;
     const renderAt = performance.now() - 150;
     while (this.poseBuffer.length > 2 && this.poseBuffer[1].receivedAt <= renderAt) this.poseBuffer.shift();
@@ -517,7 +492,7 @@ export default class WarehouseScene {
   };
 
   private isControlKey(code: string): boolean {
-    return ["KeyW", "KeyA", "KeyS", "KeyD", "KeyF", "KeyC", "KeyE"].includes(code);
+    return CAMERA_PAN_KEYS.includes(code);
   }
 
   private isEditingTarget(target: EventTarget | null): boolean {
@@ -538,62 +513,6 @@ export default class WarehouseScene {
       return Math.abs(localX) < rack.halfWidth + FORKLIFT_RADIUS &&
         Math.abs(localZ) < rack.halfDepth + FORKLIFT_RADIUS;
     });
-  }
-
-  private toggleCargo(): void {
-    if (!this.forklift || !this.forkliftLift || !this.warehouseRoot) {
-      return;
-    }
-    if (this.carriedCargo) {
-      const cargo = this.carriedCargo;
-      const yaw = this.forklift.rotation.y;
-      cargo.root.parent = this.warehouseRoot;
-      cargo.root.position.set(
-        this.forklift.position.x - Math.sin(yaw) * 1.72,
-        this.forkliftLift.position.y + 0.43,
-        this.forklift.position.z - Math.cos(yaw) * 1.72
-      );
-      cargo.root.rotation.y = yaw;
-      cargo.carried = false;
-      this.carriedCargo = undefined;
-      this.log(`cargo dropped: ${cargo.id}`);
-      return;
-    }
-
-    const tip = this.getForkPickupPoint();
-    let nearest: CargoItem | undefined;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    for (const cargo of this.cargoItems) {
-      if (cargo.carried) {
-        continue;
-      }
-      const horizontalDistance = Math.hypot(cargo.root.position.x - tip.x, cargo.root.position.z - tip.z);
-      const verticalDistance = Math.abs(cargo.root.position.y - tip.y);
-      const score = horizontalDistance + verticalDistance;
-      if (horizontalDistance <= 1.05 && verticalDistance <= 0.42 && score < nearestDistance) {
-        nearest = cargo;
-        nearestDistance = score;
-      }
-    }
-    if (!nearest) {
-      this.log("cargo pickup missed: align the forks with a pallet and match its height");
-      return;
-    }
-    nearest.root.parent = this.forkliftLift;
-    nearest.root.position.set(0, 0.43, -1.72);
-    nearest.root.rotation.y = 0;
-    nearest.carried = true;
-    this.carriedCargo = nearest;
-    this.log(`cargo picked up: ${nearest.id}`);
-  }
-
-  private getForkPickupPoint(): Vector3Type {
-    const yaw = this.forklift?.rotation.y ?? 0;
-    return new Vector3(
-      (this.forklift?.position.x ?? 0) - Math.sin(yaw) * 1.72,
-      (this.forkliftLift?.position.y ?? 0) + 0.43,
-      (this.forklift?.position.z ?? 0) - Math.cos(yaw) * 1.72
-    );
   }
 
   private selectRack(rackId: string, rackName: string): void {
@@ -804,9 +723,9 @@ export default class WarehouseScene {
   }
 
   private createDockEquipment(station: StationDefinition, label: "RECEIVING" | "SHIPPING"): void {
-    const steel = this.createMetalMaterial(`${label}-dockSteel`, "#59636c", 64);
-    const rubber = this.createMaterial(`${label}-dockRubber`, "#20262b");
-    const safety = this.createMaterial(`${label}-dockSafety`, "#e87518");
+    const steel = this.createMetalMaterial(`${station.id}-dockSteel`, "#59636c", 64);
+    const rubber = this.createMaterial(`${station.id}-dockRubber`, "#20262b");
+    const safety = this.createMaterial(`${station.id}-dockSafety`, "#e87518");
     const localDockZ = -station.depth / 2 - 1.45;
     for (const localX of [-1.8, 1.8]) {
       const doorPoint = this.stationPoint(station, localX, localDockZ);
@@ -976,7 +895,6 @@ export default class WarehouseScene {
       const point = this.stationPoint(station, x, z);
       line.position.set(point.x, 0.015, point.z); line.rotation.y = station.rotationY; line.material = yellow; line.parent = this.warehouseRoot ?? null;
     }
-    this.createDockEquipment(station, "RECEIVING");
     loads.slice(0, 20).forEach((load, index) => this.addInboundCargo(load, index, false));
   }
 
@@ -1021,172 +939,372 @@ export default class WarehouseScene {
     if (JSON.stringify(previousIds) !== JSON.stringify(currentIds)) this.telemetry("INBOUND_LOADS_SYNCED", { previousIds, currentIds });
   }
 
-  private createOutboundConveyor(station: StationDefinition, loads: LoadVisualDefinition[], transfers: ConveyorVisualDefinition[]): void {
-    this.outboundStation = station;
+  private createOutboundConveyors(stations: StationDefinition[], loads: LoadVisualDefinition[], transfers: ConveyorVisualDefinition[]): void {
+    this.conveyorStations.clear();
+    const lanes = [...stations].sort((a, b) => a.id.localeCompare(b.id));
+    // Guard before creating materials: they are only reclaimed via the mesh graph,
+    // so returning after building them leaked a material set and a 512x512 texture
+    // on every scene rebuild (and the offline fallback config has no stations).
+    if (lanes.length === 0) {
+      return;
+    }
     const frame = this.createMetalMaterial("conveyorFrame", "#59636c", 72);
     const belt = this.createMaterial("conveyorBelt", "#20262b");
     const safety = this.createMaterial("conveyorSafety", "#e87518");
     const cardboard = this.createCardboardMaterial("outboundCardboard");
     this.conveyorCardboardMaterial = cardboard;
-    OUTBOUND_CONVEYOR_LANES.forEach((laneZ, laneIndex) => {
-      const deck = MeshBuilder.CreateBox(`outboundConveyor-${laneIndex + 1}`, { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.18, depth: 1.05 }, this.scene);
-      const center = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, laneZ);
+    for (const [laneIndex, station] of lanes.entries()) {
+      this.conveyorStations.set(station.id, station);
+      const length = Math.max(3, station.width - .35);
+      const laneDepth = Math.max(.8, station.depth - .2);
+      const deck = MeshBuilder.CreateBox(`outboundConveyor-${laneIndex + 1}`, { width: length, height: 0.18, depth: laneDepth }, this.scene);
+      const center = this.stationPoint(station, 0, 0);
       deck.position.set(center.x, 0.72, center.z); deck.rotation.y = station.rotationY; deck.material = belt; deck.parent = this.warehouseRoot ?? null;
-      for (const z of [-0.58, 0.58]) {
-        const rail = MeshBuilder.CreateBox(`conveyorRail-${laneIndex + 1}`, { width: OUTBOUND_CONVEYOR_LENGTH, height: 0.3, depth: 0.1 }, this.scene);
-        const point = this.stationPoint(station, OUTBOUND_CONVEYOR_CENTER, laneZ + z);
+      for (const z of [-laneDepth / 2 - .06, laneDepth / 2 + .06]) {
+        const rail = MeshBuilder.CreateBox(`conveyorRail-${laneIndex + 1}`, { width: length, height: 0.3, depth: 0.1 }, this.scene);
+        const point = this.stationPoint(station, 0, z);
         rail.position.set(point.x, 0.88, point.z); rail.rotation.y = station.rotationY; rail.material = safety; rail.parent = this.warehouseRoot ?? null;
       }
       const rollerSpacing = 0.42;
-      const rollerCount = Math.floor(OUTBOUND_CONVEYOR_LENGTH / rollerSpacing);
+      const rollerCount = Math.floor(length / rollerSpacing);
       for (let index = 0; index <= rollerCount; index += 1) {
         const roller = MeshBuilder.CreateCylinder(`conveyorRoller-${laneIndex + 1}-${index}`, { diameter: 0.16, height: 0.92, tessellation: 18 }, this.scene);
-        const point = this.stationPoint(station, OUTBOUND_CONVEYOR_START + index * rollerSpacing, laneZ);
+        const point = this.stationPoint(station, -length / 2 + index * rollerSpacing, 0);
         roller.rotation.x = Math.PI / 2; roller.rotation.y = station.rotationY; roller.position.set(point.x, 0.84, point.z);
         roller.material = frame; roller.parent = this.warehouseRoot ?? null;
       }
-      for (const x of [-1.8, 0.8, 3.4, 6, 8]) {
+      for (const x of [-length / 2 + .3, -length / 4, length / 4, length / 2 - .3]) {
         const leg = MeshBuilder.CreateBox(`conveyorLeg-${laneIndex + 1}`, { width: 0.12, height: 0.7, depth: 0.12 }, this.scene);
-        const point = this.stationPoint(station, x, laneZ);
+        const point = this.stationPoint(station, x, 0);
         leg.position.set(point.x, 0.35, point.z); leg.material = frame; leg.parent = this.warehouseRoot ?? null;
       }
-      this.createFloorLabel(station, laneIndex === 0 ? "CONV-OUT-01" : "CONV-OUT-02", -0.2, laneZ + 0.05, 2.4, 0.42, "#d9f2e7");
-    });
-    this.createOutboundDischargePortal(station, frame, safety);
-    loads.slice(0, 8).forEach((load, index) => {
-      const transfer = transfers.find((candidate) => candidate.loadId === load.id);
-      this.addConveyorCargo(load, index, false, transfer?.conveyorId ?? `CONV-OUT-0${index % 2 + 1}`);
+      this.createFloorLabel(station, station.id, 0, 0, 2.4, 0.42, "#d9f2e7");
+      this.createConveyorFlowArrows(station, length, laneDepth, safety);
+      // Conveyors are solid, but they are not warehouse_obstacle rows because the
+      // AGV never routes through them and the route graph carries conveyor-flow
+      // edges along these same lanes. Registering them client-side stops the
+      // sandbox forklift driving straight through the decks.
+      this.rackColliders.push({
+        id: station.id, x: center.x, z: center.z,
+        halfWidth: length / 2, halfDepth: laneDepth / 2, rotationY: station.rotationY
+      });
+    }
+    this.defaultConveyorLane = lanes[0];
+    loads.slice(0, CONVEYOR_CARGO_LIMIT).forEach((load, index) => {
+      this.addConveyorCargo(load, index, false, this.conveyorIdFor(load, index, transfers, lanes));
     });
   }
 
-  private createOutboundDischargePortal(
-    station: StationDefinition,
-    frame: StandardMaterialType,
-    safety: StandardMaterialType
-  ): void {
-    const darkConcrete = this.createMaterial("outboundApron", "#777e7c");
-    const apron = MeshBuilder.CreateGround("outboundApron", { width: 5.2, height: 4.2 }, this.scene);
-    const apronPoint = this.stationPoint(station, 8.8, 0);
-    apron.position.set(apronPoint.x, 0.006, apronPoint.z);
-    apron.rotation.y = station.rotationY;
-    apron.material = darkConcrete;
-    apron.parent = this.warehouseRoot ?? null;
-
-    // The portal is centred on the west wall and visibly frames the indoor/outdoor hand-off.
-    const portalX = 6.45;
-    for (const z of [-0.92, 0.92]) {
-      const point = this.stationPoint(station, portalX, z);
-      const upright = MeshBuilder.CreateBox("outboundPortalUpright", { width: 0.2, height: 2.8, depth: 0.2 }, this.scene);
-      upright.position.set(point.x, 1.4, point.z); upright.rotation.y = station.rotationY;
-      upright.material = frame; upright.parent = this.warehouseRoot ?? null;
-
-      const curtain = MeshBuilder.CreateBox("outboundSafetyCurtain", { width: 0.08, height: 1.8, depth: 0.08 }, this.scene);
-      curtain.position.set(point.x, 1.35, point.z); curtain.rotation.y = station.rotationY;
-      curtain.material = safety; curtain.parent = this.warehouseRoot ?? null;
-    }
-    const headerPoint = this.stationPoint(station, portalX, 0);
-    const header = MeshBuilder.CreateBox("outboundPortalHeader", { width: 0.2, height: 0.22, depth: 2.05 }, this.scene);
-    header.position.set(headerPoint.x, 2.7, headerPoint.z); header.rotation.y = station.rotationY;
-    header.material = frame; header.parent = this.warehouseRoot ?? null;
-
-    for (const z of [-1.18, 1.18]) {
-      const point = this.stationPoint(station, 5.75, z);
-      const bollard = MeshBuilder.CreateCylinder("outboundBollard", { diameter: 0.24, height: 0.95, tessellation: 16 }, this.scene);
-      bollard.position.set(point.x, 0.475, point.z); bollard.material = safety; bollard.parent = this.warehouseRoot ?? null;
-    }
-
-    const texture = new DynamicTexture("outboundDirectionTexture", { width: 512, height: 128 }, this.scene, true);
-    texture.hasAlpha = true;
-    texture.drawText("OUTBOUND  →", null, 88, "bold 48px Arial", "#f4f4ee", "transparent", true, true);
-    const directionMaterial = new StandardMaterial("outboundDirectionMaterial", this.scene);
-    directionMaterial.diffuseTexture = texture;
-    directionMaterial.emissiveColor = new Color3(0.2, 0.2, 0.2);
-    directionMaterial.useAlphaFromDiffuseTexture = true;
-    const direction = MeshBuilder.CreatePlane("outboundDirection", { width: 3.8, height: 0.9 }, this.scene);
-    const directionPoint = this.stationPoint(station, 1.2, 1.45);
-    direction.position.set(directionPoint.x, 0.026, directionPoint.z);
-    direction.rotation.x = Math.PI / 2;
-    direction.rotation.y = station.rotationY + Math.PI;
-    direction.material = directionMaterial;
-    direction.parent = this.warehouseRoot ?? null;
+  /** Resolves the lane a carton actually travels on. The WCS load-balances the two
+   * lanes in WarehouseStore.completeRobotPick, so deriving the lane from the array
+   * index instead of the transfer record made the picture contradict the data. */
+  private conveyorIdFor(load: LoadVisualDefinition, index: number,
+    transfers: ConveyorVisualDefinition[], lanes: StationDefinition[]): string | undefined {
+    const transfer = transfers.find((candidate) => candidate.loadId === load.id || candidate.cartonId === load.id);
+    return transfer?.conveyorId ?? lanes[index % lanes.length]?.id;
   }
 
-  private createRobotCell(station: StationDefinition, cells: RobotCellVisualDefinition[]): void {
+  /** Chevrons pointing along the lane's travel direction, so the two lanes read as
+   * directional rather than as identical parallel decks. */
+  private createConveyorFlowArrows(station: StationDefinition, length: number, laneDepth: number, material: StandardMaterialType): void {
+    const count = Math.max(2, Math.floor(length / 2.4));
+    for (let index = 0; index < count; index += 1) {
+      const localX = -length / 2 + length * (index + .5) / count;
+      for (const side of [-1, 1]) {
+        const chevron = MeshBuilder.CreateBox(`conveyorFlowArrow-${station.id}-${index}-${side}`,
+          { width: .5, height: .02, depth: .09 }, this.scene);
+        const point = this.stationPoint(station, localX + side * .16, side * laneDepth * .22);
+        chevron.position.set(point.x, 1.01, point.z);
+        // Travel is +localX, so the chevron legs sweep back from the tip.
+        chevron.rotation.y = station.rotationY + side * .6;
+        chevron.material = material;
+        chevron.parent = this.warehouseRoot ?? null;
+      }
+    }
+  }
+
+  /** Zone outlines for the stations that carry floor area but no equipment of their
+   * own. Without these, five station types (both docks, quality control,
+   * maintenance, and any future zone) occupied space in the layout and in the
+   * overlap checks while drawing nothing at all, which is how the dock and staging
+   * areas were able to overlap unnoticed. */
+  private createAuxiliaryStations(stations: StationDefinition[]): void {
+    const zones: Array<[string, string, string]> = [
+      ["OUTBOUND_DOCK", "SHIPPING DOCK", "#8fd0ff"],
+      ["RECEIVING_DOCK", "RECEIVING DOCK", "#8fd0ff"],
+      ["QUALITY_CONTROL", "QUALITY", "#c7a6ff"],
+      ["MAINTENANCE", "MAINTENANCE", "#ffb38f"]
+    ];
+    for (const [type, label, color] of zones) {
+      for (const station of stations.filter((candidate) => candidate.type === type)) {
+        const outline = this.createMaterial(`zoneOutline-${station.id}`, color);
+        outline.emissiveColor = Color3.FromHexString(color).scale(.18);
+        const halfWidth = station.width / 2;
+        const halfDepth = station.depth / 2;
+        for (const [x, z, width, depth] of [
+          [0, -halfDepth, station.width, .1], [0, halfDepth, station.width, .1],
+          [-halfWidth, 0, .1, station.depth], [halfWidth, 0, .1, station.depth]
+        ] as number[][]) {
+          const line = MeshBuilder.CreateBox(`zoneBoundary-${station.id}`, { width, height: .02, depth }, this.scene);
+          const point = this.stationPoint(station, x, z);
+          line.position.set(point.x, .016, point.z);
+          line.rotation.y = station.rotationY;
+          line.material = outline;
+          line.parent = this.warehouseRoot ?? null;
+        }
+        this.createFloorLabel(station, label, 0, 0, Math.min(station.width - .6, 4.4), .5, color);
+        // Dock hardware belongs on the dock, not on the staging area behind it.
+        if (type === "RECEIVING_DOCK") this.createDockEquipment(station, "RECEIVING");
+        if (type === "OUTBOUND_DOCK") this.createShippingDoors(station);
+      }
+    }
+  }
+
+  /** The outbound dock backs onto the west wall, too close for the drive-in dock
+   * hardware to fit, so it gets wall-mounted shutters at the conveyor discharge
+   * height instead. */
+  private createShippingDoors(station: StationDefinition): void {
+    const steel = this.createMetalMaterial(`shippingDoorSteel-${station.id}`, "#59636c", 64);
+    const safety = this.createMaterial(`shippingDoorSafety-${station.id}`, "#e87518");
+    const wallX = -23.3;
+    for (const z of [station.position[2] - 1.5, station.position[2] + 1.5]) {
+      const shutter = MeshBuilder.CreateBox(`shippingShutter-${station.id}`, { width: 0.16, height: 3.05, depth: 2.4 }, this.scene);
+      shutter.position.set(wallX, 1.53, z);
+      shutter.material = steel;
+      shutter.parent = this.warehouseRoot ?? null;
+      const sill = MeshBuilder.CreateBox(`shippingSill-${station.id}`, { width: 0.5, height: 0.1, depth: 2.4 }, this.scene);
+      sill.position.set(wallX + 0.32, 0.05, z);
+      sill.material = safety;
+      sill.parent = this.warehouseRoot ?? null;
+    }
+  }
+
+  /** Builds the arm as a genuine pin-joint chain.
+   *
+   * The previous version positioned each link as if its pivot were at the link's
+   * lower end, but Babylon rotates a box about its centroid and the rotations were
+   * applied to the meshes rather than to the joints. Every link therefore slid off
+   * its joint by half its length times the sine of its angle, leaving three
+   * disconnected boxes with 0.36 m, 0.66 m and 0.86 m gaps between them and a
+   * gripper hovering 3.1 m up over empty floor.
+   *
+   * The invariant that keeps it assembled: rotation lives ONLY on the joint nodes,
+   * and each link mesh sits at +length/2 along its parent joint's local +Y, with
+   * the next joint at +length. Move a rotation onto a mesh and it comes apart
+   * again. */
+  private createRobotCell(station: StationDefinition, cells: RobotCellVisualDefinition[],
+    transfers: ConveyorVisualDefinition[] = []): void {
     const root = new TransformNode("robotCell-ROBOT-01", this.scene);
-    const anchor = this.stationPoint(station, -5, 0);
-    root.position.set(anchor.x, 0, anchor.z);
+    root.position.set(station.position[0], 0, station.position[2]);
     root.rotation.y = station.rotationY;
     root.parent = this.warehouseRoot ?? null;
     this.robotCellRoot = root;
+    this.robotCellStation = station;
     const baseMaterial = this.createMetalMaterial("robotCellBase", "#4b5961", 84);
     const armMaterial = this.createMaterial("robotCellArm", "#f3a712");
+    const jointMaterial = this.createMetalMaterial("robotCellJoint", "#37424a", 96);
     const safetyMaterial = this.createMaterial("robotCellSafety", "#ef7d19");
-    const cageMaterial = this.createMaterial("robotCellFence", "#8a9a9a");
+    const halfWidth = station.width / 2;
+    const halfDepth = station.depth / 2;
+
+    const pedestal = new TransformNode("robotCellPedestal", this.scene);
+    pedestal.position.set(ARM_PEDESTAL_LOCAL_X, 0, 0);
+    pedestal.parent = root;
 
     const base = MeshBuilder.CreateCylinder("robotCellBase", { diameter: 1.2, height: .28, tessellation: 32 }, this.scene);
-    base.position.y = .15; base.material = baseMaterial; base.parent = root;
-    const shoulder = new TransformNode("robotCellShoulder", this.scene); shoulder.position.set(0, .65, 0); shoulder.parent = root;
-    const upper = MeshBuilder.CreateBox("robotArmUpper", { width: .38, height: 1.55, depth: .32 }, this.scene);
-    upper.position.set(0, .75, 0); upper.rotation.z = -.42; upper.material = armMaterial; upper.parent = shoulder;
-    const elbow = new TransformNode("robotCellElbow", this.scene); elbow.position.set(.32, 1.35, 0); elbow.parent = shoulder;
-    const forearm = MeshBuilder.CreateBox("robotArmForearm", { width: .3, height: 1.35, depth: .28 }, this.scene);
-    forearm.position.set(.25, .65, 0); forearm.rotation.z = .66; forearm.material = armMaterial; forearm.parent = elbow;
-    const wrist = new TransformNode("robotCellWrist", this.scene); wrist.position.set(.7, 1.12, 0); wrist.parent = elbow;
-    const wristJoint = MeshBuilder.CreateCylinder("robotArmWrist", { diameter: .28, height: .45, tessellation: 20 }, this.scene);
-    wristJoint.rotation.z = Math.PI / 2; wristJoint.material = baseMaterial; wristJoint.parent = wrist;
-    const gripper = MeshBuilder.CreateBox("robotGripper", { width: .48, height: .12, depth: .3 }, this.scene);
-    gripper.position.set(.35, 0, 0); gripper.material = safetyMaterial; gripper.parent = wrist;
-    this.robotArm = shoulder; this.robotGripper = wrist;
+    base.position.y = .14; base.material = baseMaterial; base.parent = pedestal;
+    // Column bridges the base top (y .28) up to the shoulder; its absence was the
+    // first visible break in the chain.
+    const column = MeshBuilder.CreateCylinder("robotCellColumn", { diameter: .56, height: ARM_SHOULDER_HEIGHT - .28, tessellation: 24 }, this.scene);
+    column.position.y = .28 + (ARM_SHOULDER_HEIGHT - .28) / 2; column.material = baseMaterial; column.parent = pedestal;
 
-    // Guarding surrounds the arm but leaves the east-side AGV presentation gate open.
-    for (const [x, z, width, depth] of [[0, -2.9, 7.4, .12], [0, 2.9, 7.4, .12], [-3.7, 0, .12, 5.8]] as number[][]) {
-      const fence = MeshBuilder.CreateBox("robotCellFence", { width, height: 1.4, depth }, this.scene);
-      fence.position.set(x, .7, z); fence.material = cageMaterial; fence.parent = root;
-      fence.visibility = .7;
+    const yawNode = new TransformNode("robotCellYaw", this.scene);
+    yawNode.parent = pedestal;
+    const shoulderNode = new TransformNode("robotCellShoulder", this.scene);
+    shoulderNode.position.y = ARM_SHOULDER_HEIGHT;
+    shoulderNode.parent = yawNode;
+    const shoulderJoint = MeshBuilder.CreateSphere("robotArmShoulderJoint", { diameter: .46, segments: 16 }, this.scene);
+    shoulderJoint.material = jointMaterial; shoulderJoint.parent = shoulderNode;
+
+    const upper = MeshBuilder.CreateBox("robotArmUpper", { width: .34, height: ARM_UPPER_LENGTH, depth: .3 }, this.scene);
+    upper.position.y = ARM_UPPER_LENGTH / 2; upper.material = armMaterial; upper.parent = shoulderNode;
+
+    const elbowNode = new TransformNode("robotCellElbow", this.scene);
+    elbowNode.position.y = ARM_UPPER_LENGTH;
+    elbowNode.parent = shoulderNode;
+    const elbowJoint = MeshBuilder.CreateSphere("robotArmElbowJoint", { diameter: .38, segments: 16 }, this.scene);
+    elbowJoint.material = jointMaterial; elbowJoint.parent = elbowNode;
+
+    const forearm = MeshBuilder.CreateBox("robotArmForearm", { width: .28, height: ARM_FOREARM_LENGTH, depth: .26 }, this.scene);
+    forearm.position.y = ARM_FOREARM_LENGTH / 2; forearm.material = armMaterial; forearm.parent = elbowNode;
+
+    const wristNode = new TransformNode("robotCellWrist", this.scene);
+    wristNode.position.y = ARM_FOREARM_LENGTH;
+    wristNode.parent = elbowNode;
+    const wristJoint = MeshBuilder.CreateCylinder("robotArmWrist", { diameter: .28, height: .3, tessellation: 20 }, this.scene);
+    wristJoint.rotation.z = Math.PI / 2; wristJoint.material = jointMaterial; wristJoint.parent = wristNode;
+    const gripperBody = MeshBuilder.CreateBox("robotGripper", { width: .34, height: .18, depth: .28 }, this.scene);
+    gripperBody.position.y = ARM_GRIPPER_LENGTH - .1; gripperBody.material = safetyMaterial; gripperBody.parent = wristNode;
+    for (const x of [-.15, .15]) {
+      const finger = MeshBuilder.CreateBox("robotGripperFinger", { width: .05, height: .2, depth: .22 }, this.scene);
+      finger.position.set(x, ARM_GRIPPER_LENGTH + .06, 0); finger.material = safetyMaterial; finger.parent = wristNode;
     }
-    for (const x of [-3.7, 3.7]) for (const z of [-2.9, 2.9]) {
+
+    this.armYaw = yawNode; this.armShoulder = shoulderNode; this.armElbow = elbowNode; this.armWrist = wristNode;
+
+    // Corner posts only. The route-affecting perimeter comes from the obstacle map
+    // so the barriers the planner sees are the barriers the operator sees.
+    for (const x of [-halfWidth, halfWidth]) for (const z of [-halfDepth, halfDepth]) {
       const post = MeshBuilder.CreateCylinder("robotCellPost", { diameter: .12, height: 1.6, tessellation: 12 }, this.scene);
       post.position.set(x, .8, z); post.material = safetyMaterial; post.parent = root;
     }
     const handoff = MeshBuilder.CreateBox("robotHandoffPad", { width: 2.2, height: .025, depth: 2.1 }, this.scene);
-    handoff.position.set(2.0, .02, 0); handoff.material = safetyMaterial; handoff.parent = root;
-    this.createFloorLabel(station, "ROBOT-01", -5, -3.45, 2.5, .55, "#fff1bf");
-    this.robotCellPhase = cells.find((cell) => cell.id === "ROBOT-01")?.phase ?? "IDLE";
-    this.syncRobotCell(cells);
+    handoff.position.set(ROBOT_HANDOFF_LOCAL_X, .02, 0); handoff.material = safetyMaterial; handoff.parent = root;
+    this.createFloorLabel(station, "ROBOT-01", 0, -halfDepth + .55, 2.5, .55, "#fff1bf");
+    this.robotCellPhase = "";
+    this.applyArmPose(this.stowPose(), 0);
+    this.syncRobotCell(cells, transfers);
   }
 
-  private syncRobotCell(cells: RobotCellVisualDefinition[]): void {
+  private solveArmPose(localX: number, localY: number, localZ: number): ArmPose {
+    const target = { x: localX, y: localY, z: localZ };
+    const reach = requiredReach(ARM_GEOMETRY, target);
+    if (reach >= maximumReach(ARM_GEOMETRY))
+      this.telemetry("ROBOT_TARGET_OUT_OF_REACH", {
+        target, required: Number(reach.toFixed(2)), maximum: maximumReach(ARM_GEOMETRY)
+      });
+    return solveArmPose(ARM_GEOMETRY, target);
+  }
+
+  private stowPose(): ArmPose {
+    return this.solveArmPose(ARM_PEDESTAL_LOCAL_X + .85, 2.1, 0);
+  }
+
+  private applyArmPose(pose: ArmPose, frames: number): void {
+    if (!this.armYaw || !this.armShoulder || !this.armElbow || !this.armWrist) return;
+    const joints: Array<[TransformNodeType, "rotation.y" | "rotation.z", number]> = [
+      [this.armYaw, "rotation.y", pose.yaw],
+      [this.armShoulder, "rotation.z", pose.shoulder],
+      [this.armElbow, "rotation.z", pose.elbow],
+      [this.armWrist, "rotation.z", pose.wrist]
+    ];
+    for (const [node, property, value] of joints) {
+      this.scene.stopAnimation(node);
+      if (frames <= 0) {
+        if (property === "rotation.y") node.rotation.y = value; else node.rotation.z = value;
+        continue;
+      }
+      const current = property === "rotation.y" ? node.rotation.y : node.rotation.z;
+      const animation = new Animation(`armJoint-${node.name}`, property, 60, Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
+      // Take the short way round so a yaw swing past pi does not unwind the arm.
+      const delta = Math.atan2(Math.sin(value - current), Math.cos(value - current));
+      animation.setKeys([{ frame: 0, value: current }, { frame: frames, value: current + delta }]);
+      const easing = new CubicEase();
+      easing.setEasingMode(EasingFunction.EASINGMODE_EASEINOUT);
+      animation.setEasingFunction(easing);
+      this.scene.beginDirectAnimation(node, [animation], 0, frames, false);
+    }
+  }
+
+  /** Mirrors WarehouseStore.completeRobotPick: the WCS assigns each carton to the
+   * lane with fewer transfers in flight, so the arm reaches for that same lane. */
+  private placingLane(transfers: ConveyorVisualDefinition[]): StationDefinition | undefined {
+    const lanes = [...this.conveyorStations.values()].sort((a, b) => a.id.localeCompare(b.id));
+    if (lanes.length === 0) return undefined;
+    const moving = (id: string): number => transfers.filter((t) => t.conveyorId === id && t.status === "MOVING").length;
+    return lanes.reduce((best, lane) => moving(lane.id) < moving(best.id) ? lane : best, lanes[0]);
+  }
+
+  private syncRobotCell(cells: RobotCellVisualDefinition[], transfers: ConveyorVisualDefinition[] = []): void {
     const phase = cells.find((cell) => cell.id === "ROBOT-01")?.phase ?? "IDLE";
-    if (!this.robotArm || !this.robotGripper || phase === this.robotCellPhase) return;
+    if (!this.armYaw || !this.robotCellStation || phase === this.robotCellPhase) return;
     this.robotCellPhase = phase;
-    const active = ["AT_HANDOFF", "PICKING", "PLACING"].includes(phase);
-    this.robotArm.rotation.y = active ? .35 : 0;
-    this.robotArm.rotation.z = phase === "PICKING" ? -.15 : phase === "PLACING" ? .35 : -.42;
-    this.robotGripper.rotation.z = phase === "PLACING" ? -.28 : 0;
+    const station = this.robotCellStation;
+    const pad = { x: ROBOT_HANDOFF_LOCAL_X, z: 0 };
+
+    if (phase === "IDLE") {
+      this.applyArmPose(this.stowPose(), 42);
+      this.setHandoffPallet(false);
+      this.setGrippedCarton(false);
+    } else if (phase === "AT_HANDOFF") {
+      this.setHandoffPallet(true);
+      this.setGrippedCarton(false);
+      this.applyArmPose(this.solveArmPose(pad.x, 1.35, pad.z), 42);
+    } else if (phase === "PICKING") {
+      this.setHandoffPallet(true);
+      this.applyArmPose(this.solveArmPose(pad.x, .95, pad.z), 34);
+      this.setGrippedCarton(true);
+    } else if (phase === "PLACING") {
+      const lane = this.placingLane(transfers);
+      // Aim at the lane's INFEED, not its centre: the lanes are 9.6 m long, so the
+      // centre is 7 m from the pedestal and far outside the arm's envelope. Going
+      // through stationPoint then back into cell-local keeps this correct for any
+      // lane rotation rather than assuming the two frames are axis-aligned.
+      const target = lane
+        ? this.toStationLocal(station, ...this.conveyorInfeed(lane))
+        : { x: ARM_PEDESTAL_LOCAL_X - 2, z: 0 };
+      this.applyArmPose(this.solveArmPose(target.x, 1.1, target.z), 46);
+      this.setGrippedCarton(true);
+    }
     this.telemetry("ROBOT_PHASE", { robotId: "ROBOT-01", phase });
   }
 
-  private createCompanionAgvs(agvs: ApiAgv[]): void {
-    const palette = ["#d97b21", "#6d8ee6", "#56b58b"];
-    agvs.filter((agv) => agv.id !== "FL-01").forEach((agv, index) => {
-      const root = new TransformNode(`companion-${agv.id}`, this.scene);
-      root.position.set(agv.x, 0, agv.z); root.rotation.y = -agv.theta - Math.PI / 2; root.parent = this.warehouseRoot ?? null;
-      const body = MeshBuilder.CreateBox(`companionBody-${agv.id}`, { width: 1.05, height: .5, depth: 1.3 }, this.scene);
-      body.position.y = .52; body.material = this.createMaterial(`companionMaterial-${agv.id}`, palette[index % palette.length]); body.parent = root;
-      const mast = MeshBuilder.CreateBox(`companionMast-${agv.id}`, { width: .62, height: 1.9, depth: .12 }, this.scene);
-      mast.position.set(0, 1.35, -.58); mast.material = this.createMetalMaterial(`companionSteel-${agv.id}`, "#657382", 64); mast.parent = root;
-      const beacon = MeshBuilder.CreateCylinder(`companionBeacon-${agv.id}`, { diameter: .16, height: .15, tessellation: 16 }, this.scene);
-      beacon.position.set(0, 1.35, .4); beacon.material = this.createMaterial(`companionBeaconMaterial-${agv.id}`, "#63e6be"); beacon.parent = root;
-      this.companionAgvs.set(agv.id, root);
-    });
+  /** World position where cargo enters a lane, i.e. where the arm must release it. */
+  private conveyorInfeed(lane: StationDefinition): [number, number] {
+    const point = this.stationPoint(lane, -lane.width / 2 + CONVEYOR_INFEED_INSET, 0);
+    return [point.x, point.z];
   }
 
-  private syncCompanionAgvs(agvs: ApiAgv[]): void {
-    for (const agv of agvs) {
-      const root = this.companionAgvs.get(agv.id);
-      if (!root || agv.id === "FL-01") continue;
-      root.position.x = agv.x; root.position.z = agv.z; root.rotation.y = -agv.theta - Math.PI / 2;
+  /** Inverse of stationPoint: world position into station-local coordinates. */
+  private toStationLocal(station: StationDefinition, worldX: number, worldZ: number): { x: number; z: number } {
+    const cos = Math.cos(station.rotationY);
+    const sin = Math.sin(station.rotationY);
+    const dx = worldX - station.position[0];
+    const dz = worldZ - station.position[2];
+    return { x: dx * cos - dz * sin, z: dx * sin + dz * cos };
+  }
+
+  /** The pallet the AGV presented, sitting on the handoff pad. */
+  private setHandoffPallet(visible: boolean): void {
+    if (visible === Boolean(this.handoffPallet)) return;
+    if (!visible) {
+      this.handoffPallet?.dispose(false, true);
+      this.handoffPallet = undefined;
+      return;
     }
+    if (!this.robotCellRoot) return;
+    const pallet = new TransformNode("robotHandoffPallet", this.scene);
+    pallet.position.set(ROBOT_HANDOFF_LOCAL_X, .06, 0);
+    pallet.parent = this.robotCellRoot;
+    const deck = MeshBuilder.CreateBox("robotHandoffPalletDeck", { width: .92, height: .12, depth: .74 }, this.scene);
+    deck.material = this.createWoodMaterial("robotHandoffPalletWood"); deck.parent = pallet;
+    // One shared cardboard material for all four cartons; creating it per carton
+    // would build four identical 512x512 procedural textures.
+    const cartonMaterial = this.createCardboardMaterial("robotHandoffCartonBoard");
+    for (const [x, z] of [[-.24, -.2], [.24, -.2], [-.24, .2], [.24, .2]] as number[][]) {
+      const carton = MeshBuilder.CreateBox("robotHandoffCarton", { width: .38, height: .34, depth: .3 }, this.scene);
+      carton.position.set(x, .23, z);
+      carton.material = cartonMaterial;
+      carton.parent = pallet;
+    }
+    this.handoffPallet = pallet;
+  }
+
+  /** The carton currently held by the gripper. Parented to the wrist so it follows
+   * the solved pose rather than being animated separately. */
+  private setGrippedCarton(visible: boolean): void {
+    if (visible === Boolean(this.grippedCarton)) return;
+    if (!visible) {
+      this.grippedCarton?.dispose(false, true);
+      this.grippedCarton = undefined;
+      return;
+    }
+    if (!this.armWrist) return;
+    const carton = MeshBuilder.CreateBox("robotGrippedCarton", { width: .38, height: .34, depth: .3 }, this.scene);
+    carton.position.y = ARM_GRIPPER_LENGTH + .25;
+    carton.material = this.createCardboardMaterial("robotGrippedCartonBoard");
+    carton.parent = this.armWrist;
+    this.grippedCarton = carton;
   }
 
   private createFloorLabel(station: StationDefinition, text: string, localX: number, localZ: number, width: number, height: number, color: string): void {
@@ -1201,45 +1319,68 @@ export default class WarehouseScene {
     label.material = material; label.parent = this.warehouseRoot ?? null;
   }
 
-  private addConveyorCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean, conveyorId = "CONV-OUT-01"): void {
-    if (!this.conveyorCardboardMaterial || !this.outboundStation) return;
-    const root = new TransformNode(`shippingCargo-${index}`, this.scene);
-    const laneIndex = conveyorId.endsWith("02") ? 1 : 0;
-    const laneZ = OUTBOUND_CONVEYOR_LANES[laneIndex];
-    const start = this.stationPoint(this.outboundStation, -1.75 - index * 0.15, laneZ);
+  /** Cargo enters at the lane's local -x infeed and travels to its local +x
+   * discharge. Every position goes through stationPoint, so the lane's rotationY is
+   * what decides the world-space direction: the outbound lanes are rotated by pi in
+   * V21 so they run west into the shipping dock. Nothing here hard-codes a compass
+   * direction, and the two lanes can be given opposite rotations independently.
+   * Node and animation names are keyed by load id, not array index, so a carton's
+   * identity survives resyncs. */
+  private addConveyorCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean, conveyorId?: string): void {
+    const station = (conveyorId ? this.conveyorStations.get(conveyorId) : undefined) ?? this.defaultConveyorLane;
+    if (!this.conveyorCardboardMaterial || !station) return;
+    const root = new TransformNode(`shippingCargo-${load.id}`, this.scene);
+    const start = this.stationPoint(station, -station.width / 2 + CONVEYOR_INFEED_INSET + index * .15, 0);
     root.position.set(start.x, 1.2, start.z);
-    root.rotation.y = this.outboundStation.rotationY;
+    root.rotation.y = station.rotationY;
     root.parent = this.warehouseRoot ?? null;
-    const box = MeshBuilder.CreateBox(`shippingBox-${index}`, { width: 0.62, height: 0.56, depth: 0.62 }, this.scene);
+    const box = MeshBuilder.CreateBox(`shippingBox-${load.id}`, { width: 0.62, height: 0.56, depth: 0.62 }, this.scene);
     box.material = this.conveyorCardboardMaterial;
     box.parent = root;
     const item = { id: load.id, root, carried: false, meshes: [box] };
     this.registerLoadHover(box, load.id);
     this.conveyorCargoItems.push(item);
     if (animateEntry) this.animateCargoEntry(item);
-    const end = this.stationPoint(this.outboundStation, 5.6 - index * 0.55, laneZ);
-    const travel = new Animation(`conveyorTravel-${index}`, "position", 30, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
+    const end = this.stationPoint(station, station.width / 2 - .7 - index * .25, 0);
+    const travel = new Animation(`conveyorTravel-${load.id}`, "position", 30, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
     travel.setKeys([{ frame: 0, value: root.position.clone() }, { frame: 180, value: new Vector3(end.x, 1.2, end.z) }]);
     this.scene.beginDirectAnimation(root, [travel], 0, 180, false);
+    this.telemetry("CONVEYOR_CARGO_ADDED", {
+      loadId: load.id, conveyorId: station.id,
+      startX: Number(start.x.toFixed(2)), endX: Number(end.x.toFixed(2))
+    });
   }
 
-  private syncConveyorCargo(loads: LoadVisualDefinition[]): void {
-    const desired = loads.slice(0, 4);
+  private syncConveyorCargo(loads: LoadVisualDefinition[], transfers: ConveyorVisualDefinition[]): void {
+    const lanes = [...this.conveyorStations.values()].sort((a, b) => a.id.localeCompare(b.id));
+    const desired = loads.slice(0, CONVEYOR_CARGO_LIMIT);
     const desiredIds = new Set(desired.map((load) => load.id));
     if (desired.length !== this.conveyorCargoItems.length) this.telemetry("CONVEYOR_COUNT_CHANGED", { from: this.conveyorCargoItems.length, to: desired.length });
     for (const item of [...this.conveyorCargoItems]) {
       if (desiredIds.has(item.id)) continue;
       this.conveyorCargoItems.splice(this.conveyorCargoItems.indexOf(item), 1);
       const exit = new Animation("conveyorCargoExit", "position", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
-      const end = this.outboundStation ? this.stationPoint(this.outboundStation, 9.6, 0) : { x: item.root.position.x, z: item.root.position.z };
+      // Leave along the lane the carton is actually on, past its discharge end.
+      // The previous fixed offset from lanes[0] dragged cartons diagonally onto
+      // the other lane's centreline before they faded.
+      const lane = this.laneForCargo(item.id, transfers) ?? this.defaultConveyorLane;
+      const end = lane
+        ? this.stationPoint(lane, lane.width / 2 + 1.6, 0)
+        : { x: item.root.position.x, z: item.root.position.z };
       exit.setKeys([{ frame: 0, value: item.root.position.clone() }, { frame: 30, value: new Vector3(end.x, item.root.position.y, end.z) }]);
       const scale = new Animation("conveyorCargoExitScale", "scaling", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
       scale.setKeys([{ frame: 0, value: item.root.scaling.clone() }, { frame: 30, value: new Vector3(0.4, 0.4, 0.4) }]);
       this.scene.beginDirectAnimation(item.root, [exit, scale], 0, 30, false, 1, () => item.root.dispose(false, true));
     }
     desired.forEach((load, index) => {
-      if (!this.conveyorCargoItems.some((item) => item.id === load.id)) this.addConveyorCargo(load, index, true, `CONV-OUT-0${index % 2 + 1}`);
+      if (!this.conveyorCargoItems.some((item) => item.id === load.id))
+        this.addConveyorCargo(load, index, true, this.conveyorIdFor(load, index, transfers, lanes));
     });
+  }
+
+  private laneForCargo(loadId: string, transfers: ConveyorVisualDefinition[]): StationDefinition | undefined {
+    const transfer = transfers.find((candidate) => candidate.loadId === loadId || candidate.cartonId === loadId);
+    return transfer?.conveyorId ? this.conveyorStations.get(transfer.conveyorId) : undefined;
   }
 
   private syncRackCargo(racks: RackDefinition[]): void {
@@ -1366,23 +1507,6 @@ export default class WarehouseScene {
       addMark(`shipping-crosswalk-${i}`, outPoint.x, outPoint.z, 0.25, 1.2, white);
     }
 
-    // Longitudinal exclusion lines reinforce the westbound conveyor flow while leaving the AGV loading end open.
-    for (const localZ of [-1.12, 1.12]) {
-      const point = this.stationPoint(outbound, 2.15, localZ);
-      const mark = MeshBuilder.CreateBox("shipping-conveyor-clearance", { width: 8.7, height: 0.018, depth: 0.08 }, this.scene);
-      mark.position.set(point.x, 0.014, point.z);
-      mark.rotation.y = outbound.rotationY;
-      mark.material = yellow;
-      mark.parent = this.warehouseRoot ?? null;
-    }
-    for (let index = 0; index < 9; index += 1) {
-      const point = this.stationPoint(outbound, -1.45 + index * 0.95, -1.12);
-      const hatch = MeshBuilder.CreateBox(`shipping-clearance-hatch-${index}`, { width: 0.08, height: 0.019, depth: 0.46 }, this.scene);
-      hatch.position.set(point.x, 0.015, point.z);
-      hatch.rotation.y = outbound.rotationY + 0.62;
-      hatch.material = yellow;
-      hatch.parent = this.warehouseRoot ?? null;
-    }
   }
 
   private createMetalMaterial(name: string, hex: string, specularPower: number): StandardMaterialType {
@@ -1460,10 +1584,6 @@ export default class WarehouseScene {
     }));
   }
 
-  private formatPosition(position: Vector3Type): string {
-    return `[${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)}]`;
-  }
-
   private log(message: string): void {
     (window as Window & { __warehouseDiagnostics?: { info: (stage: string, value: unknown) => void } })
       .__warehouseDiagnostics?.info("forklift", message);
@@ -1491,17 +1611,23 @@ export default class WarehouseScene {
     this.poseBuffer.length = 0;
     this.wheelMeshes.length = 0;
     this.chargingIndicators.clear();
-    this.companionAgvs.clear();
+    this.conveyorStations.clear();
+    this.defaultConveyorLane = undefined;
+    this.inboundStation = undefined;
     this.robotCellRoot = undefined;
-    this.robotArm = undefined;
-    this.robotGripper = undefined;
+    this.robotCellStation = undefined;
+    this.armYaw = undefined;
+    this.armShoulder = undefined;
+    this.armElbow = undefined;
+    this.armWrist = undefined;
+    this.handoffPallet = undefined;
+    this.grippedCarton = undefined;
     this.robotCellPhase = "IDLE";
     this.lastRenderedPosition = undefined;
     this.carriedCargo = undefined;
     this.inboundCardboardMaterial = undefined;
     this.inboundPalletMaterial = undefined;
     this.conveyorCardboardMaterial = undefined;
-    this.collisionBlocked = false;
     this.selectedRackId = undefined;
     this.forklift = undefined;
     this.forkliftLift = undefined;
