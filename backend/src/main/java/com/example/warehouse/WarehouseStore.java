@@ -555,12 +555,13 @@ class WarehouseStore {
    * with task_id is null, so that row was permanently unclaimable and every queued
    * order stalled behind it with nothing in the logs.
    *
-   * <p>Pose always lands. Status lands only while the cached task still matches the
-   * stored one, which keeps MOVING/IDLE responsive without letting a stale snapshot
-   * overwrite a transition the command path has already made. */
+   * <p>Only task_id needed guarding. An earlier version gated the status write on
+   * the cached task still matching the stored one, which was an over-correction:
+   * whenever the cache lagged a dispatch the vehicle kept whatever status it had
+   * before, so it sat reading PARKED while visibly driving across the floor. Pose
+   * and status both always land; the jobId argument is deliberately unused. */
   void updateAgvMotion(String agvId, double x, double z, double theta, double velocity, String status, UUID jobId) {
-    jdbc.update("update agv set x=?,z=?,theta=?,velocity=? where id=?", x, z, theta, velocity, agvId);
-    jdbc.update("update agv set status=? where id=? and task_id is not distinct from ?", status, agvId, jobId);
+    jdbc.update("update agv set x=?,z=?,theta=?,velocity=?,status=? where id=?", x, z, theta, velocity, status, agvId);
   }
 
   void updatePower(String agvId, double battery, boolean charging) {
