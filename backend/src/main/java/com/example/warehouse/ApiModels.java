@@ -28,8 +28,11 @@ public final class ApiModels {
   public record VdaDispatchView(UUID id, UUID taskId, String manufacturer, String serialNumber, String orderId, long orderUpdateId,
       String status, boolean valid, String validationError, String rejectionError, Instant createdAt, Instant publishedAt,
       Instant acceptedAt, Instant finishedAt, String payload) {}
+  public record ExecutionEventView(UUID id, UUID transportOrderId, UUID transportTaskId, String vehicleId,
+      String eventType, String correlationId, String vdaOrderId, long orderUpdateId, Instant occurredAt, String description) {}
   public record TransportOrderView(UUID id, String type, String priority, String status, String objective, String scenarioId,
-      String error, Instant createdAt, Instant completedAt, List<TransportTaskView> tasks, List<VdaDispatchView> vdaDispatches) {}
+      String error, Instant createdAt, Instant completedAt, List<TransportTaskView> tasks,
+      List<VdaDispatchView> vdaDispatches, List<ExecutionEventView> executionEvents) {}
   public record ScenarioPreset(String id, String name, String description, int storedLoads, int inboundLoads,
       String orderType, int orderLoads, String priority, int agvBattery) {}
   public record ScenarioView(String id, String name, boolean configured) {}
@@ -52,7 +55,6 @@ public final class ApiModels {
   public record OutboundRequest(@NotEmpty List<String> loadIds) {}
   public record TransportOrderRequest(@NotBlank String type, @NotBlank String priority, @NotEmpty List<String> loadIds, String objective) {}
   public record ScenarioRequest(@NotBlank String presetId) {}
-  public record DemoEventRequest(@NotBlank String type, UUID taskId) {}
   public record SpeedRequest(@Min(1) @Max(4) int multiplier) {}
 
   public record CandidateSlot(String id, String name, int freeCapacity, double x, double z) {}
@@ -65,10 +67,19 @@ public final class ApiModels {
       boolean omittedTilesArePassable, List<BlockedTile> blockedTiles, List<MapStation> stations,
       List<Map<String, Object>> routeNodes, List<Map<String, Object>> routeEdges) {}
 
-  public record WarehouseEvent(UUID eventId, String type, Instant occurredAt, String warehouseId, long simulationEpoch, Object payload) {}
+  public record WarehouseEvent(UUID eventId, String type, String eventType, Instant occurredAt, String warehouseId, long simulationEpoch,
+      String entityId, String correlationId, String payloadVersion, Object payload) {}
+
+  public static final String EVENT_PAYLOAD_VERSION = "1";
 
   public static WarehouseEvent event(String type, long simulationEpoch, Object payload) {
-    return new WarehouseEvent(UUID.randomUUID(), type, Instant.now(), "linz", simulationEpoch, payload);
+    return event(type, type, null, null, simulationEpoch, EVENT_PAYLOAD_VERSION, payload);
+  }
+
+  public static WarehouseEvent event(String type, String eventType, String entityId, String correlationId, long simulationEpoch, String payloadVersion,
+      Object payload) {
+    return new WarehouseEvent(UUID.randomUUID(), type, eventType, Instant.now(), "linz", simulationEpoch, entityId, correlationId,
+        payloadVersion, payload);
   }
 
   @SuppressWarnings("unchecked")

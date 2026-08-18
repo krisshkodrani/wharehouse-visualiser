@@ -25,21 +25,30 @@ class DispatchService {
     this.validator = new VdaSchemaValidator(mapper);
   }
 
+  /** Number of queued tasks examined per dispatch pass before giving up. Bounded
+   * so a long queue of same-destination tasks cannot make one pass expensive. */
+  private static final int DISPATCH_CANDIDATES = 12;
+
   @Transactional
   public boolean dispatchNext() {
-    var next = store.nextQueuedJob();
-    if (next.isEmpty()) return false;
-    var job = next.get();
+    var candidates = store.queuedJobs(DISPATCH_CANDIDATES);
+    if (candidates.isEmpty()) return false;
     var agvId = store.claimableAgvId();
     if (agvId.isEmpty()) return false;
-    if (!store.reserveTaskZone(job.id(), agvId.get(), job.destination())) return false;
-    Vda5050.Order order = order(job, agvId.get());
-    validator.validate("order", order);
-    String payload = write(order);
-    store.recordDispatch(job.id(), agvId.get(), order.orderId(), order.orderUpdateId(), payload);
-    store.markDispatched(job.id(), agvId.get(), payload);
-    events.publish("TRANSPORT_TASK_UPDATED", view(job, "DISPATCHED"));
-    return true;
+    for (WarehouseStore.TaskRow job : candidates) {
+      // Skip past tasks whose destination zone is held by another task rather
+      // than abandoning the pass; otherwise a blocked head-of-queue task
+      // starves every task behind it.
+      if (!store.reserveTaskZone(job.id(), agvId.get(), job.destination())) continue;
+      Vda5050.Order order = order(job, agvId.get());
+      validator.validate("order", order);
+      String payload = write(order);
+      store.recordDispatch(job.id(), agvId.get(), order.orderId(), order.orderUpdateId(), payload);
+      store.markDispatched(job.id(), agvId.get(), payload);
+      events.publish("TRANSPORT_TASK_UPDATED", view(job, "DISPATCHED"));
+      return true;
+    }
+    return false;
   }
 
   @Transactional
