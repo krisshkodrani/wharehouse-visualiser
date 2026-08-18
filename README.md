@@ -4,7 +4,16 @@ An OpenUI5 and Babylon.js warehouse control tower backed by Spring Boot, Postgre
 
 > Reference implementation for product and system-design discussion. It is not VDA-certified, a functional-safety component, or a production deployment.
 
-[Architecture](docs/ARCHITECTURE.md) · [Product brief](docs/PRODUCT.md) · [OpenAPI](docs/openapi.yaml) · [MQTT contract](docs/MQTT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
+[Architecture at a glance](https://claude.ai/code/artifact/35b1299c-6f7e-4fb1-ae19-92c5c340b504) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Product brief](docs/PRODUCT.md) · [OpenAPI](docs/openapi.yaml) · [MQTT contract](docs/MQTT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
+
+![Story view: the live warehouse with the current order narrated beneath it](artifacts/warehouse-story-view.png)
+
+The app opens in **story view**: the 3D warehouse, one line describing what the vehicle is
+doing right now, and a strip showing where the current order sits between operator intent and
+completed execution. **Engineer view** is one click away in the header and restores the full
+control tower — transport order rail, execution timeline, VDA 5050 protocol workbench, and
+operational KPIs. The `ⓘ` button explains the six steps between a REST request and a moving
+forklift.
 
 [![Warehouse control tower walkthrough](artifacts/warehouse-control-tower.png)](artifacts/warehouse-control-tower.webm)
 
@@ -83,14 +92,18 @@ Transport-order creation accepts an optional `Idempotency-Key`; reuse with the s
 ## Interview demo path
 
 1. Select **Inbound surge** and point out the automatically created business order and six transport tasks.
-2. Follow FL-01 on the 3D map while the activity strip explains the current operation.
-3. Open **VDA 5050** under the order detail tabs to show schema validity, stable order ID, update IDs, and the raw payload.
-4. Pause and resume the fleet to demonstrate standard `startPause` and `stopPause` instant actions.
-5. Use **Demo tools** to discuss rejection and blocked-route recovery without disrupting the normal happy path.
+2. Stay in story view: the narrated line and the stage strip carry the flow from operator
+   intent to completed execution without any explanation of the screen.
+3. Orbit and pan the 3D map — drag to orbit, **WASD** to pan, scroll to zoom — while the
+   vehicle drives itself from live telemetry.
+4. Open **ⓘ How this works** for the six steps between the REST request and a moving forklift.
+5. Switch to **Engineer view** and open the **VDA 5050 workbench** to show schema validity,
+   the stable order ID, update IDs, base/horizon release, and the raw payload.
+6. Pause and resume the fleet to demonstrate standard `startPause` and `stopPause` instant actions.
 
 ## Deliberate demo limits
 
-The public data model and UI support nullable AGV assignment and multiple vehicles, but the demo simulates only FL-01. Authentication, TLS, and multi-AGV traffic arbitration remain outside the interview scope. Simulation speed, scenario reset, and failure injection are explicitly demo controls rather than VDA messages.
+The public data model and UI support nullable AGV assignment and multiple vehicles, but the demo simulates only FL-01. Authentication, TLS, and multi-AGV traffic arbitration remain outside the interview scope. Simulation speed and scenario reset are explicitly demo controls rather than VDA messages. There is no fault-injection control: rejection and blocked-route recovery are real backend behaviours, and a button that fabricated them would not demonstrate the same thing. Driving them from the simulator is tracked in the [roadmap](docs/ROADMAP.md).
 
 ## License
 

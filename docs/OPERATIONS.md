@@ -8,7 +8,7 @@ Backend health is `/actuator/health`; Prometheus metrics are available internall
 
 - 99% of local REST commands complete within 500 ms, excluding optional external AI latency.
 - No schema-invalid VDA message is published.
-- Pending outbox commands drain within five seconds after broker recovery, with vehicle-specific topics for FL-01, FL-02, and FL-03.
+- Pending outbox commands drain within five seconds after broker recovery, on the vehicle-specific topic for FL-01.
 - The browser remains responsive while receiving 20 Hz visualization messages.
 
 ## Recovery playbook

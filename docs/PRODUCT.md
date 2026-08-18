@@ -16,7 +16,7 @@ For the reference workload, command acknowledgement should remain below 500 ms l
 
 ## Scope decisions
 
-Version 0.1.0 proves one compact Linz facility with three simulated forklift AGVs. It includes deterministic scenarios, transport-order prioritization, VDA base/horizon execution, destination-zone reservations, carton-level outbound picking, the `ROBOT-01` two-conveyor cell, instant-action pause/cancel, audit history, and failure injection. Authentication, TLS termination, high availability, and certified conformance remain explicit future work rather than hidden assumptions.
+Version 0.1.0 proves one compact Linz facility with a single simulated forklift AGV. It includes deterministic scenarios, transport-order prioritization, VDA base/horizon execution, destination-zone reservations, carton-level outbound picking, the `ROBOT-01` two-conveyor cell, instant-action pause/cancel, audit history, and failure injection. Authentication, TLS termination, high availability, and certified conformance remain explicit future work rather than hidden assumptions.
 
 ## Evolution path
 
