@@ -23,15 +23,28 @@ The demo runs at <https://whv.aipoweredapps.dev> on a single AWS Lightsail insta
 
 Four files live on the instance in `/opt/whv/`: `compose.prod.yaml`, `docker/Caddyfile`, `docker/nginx.prod.conf`, and `docker/mosquitto.conf`. The repository is not cloned there.
 
+### Checking that the actuator is not exposed
+
+`curl https://whv.aipoweredapps.dev/actuator/prometheus` returns **200**, which looks alarming and is not. nginx never proxies `/actuator`, so the path falls through to the SPA catch-all and the 200 is `index.html`. Verify by content, not status code:
+
+```bash
+curl -sS https://whv.aipoweredapps.dev/actuator/prometheus | grep -c jvm_   # expect 0
+curl -sSI https://whv.aipoweredapps.dev/actuator/prometheus | grep -i content-type   # expect text/html
+```
+
+A status-code check would pass here whether or not the endpoint were genuinely exposed, so it is worth nothing.
+
 ### Deploy and roll back
 
 Both directions are the same edit, because images are pinned by tag and the tag lives in `.env`:
 
 ```bash
-sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=v0.1.1/' /opt/whv/.env   # or back to the previous tag
+sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=0.2.1/' /opt/whv/.env   # or back to the previous tag
 docker compose -f compose.prod.yaml pull
 docker compose -f compose.prod.yaml up -d
 ```
+
+The image tag carries no `v`. `release.yml` tags images through `docker/metadata-action` with `type=semver,pattern={{version}}`, which strips the prefix, so git tag `v0.2.0` publishes image tags `0.2.0`, `0.2`, and `latest`.
 
 Rollback covers application code, not schema. Flyway migrations are forward-only, so returning to an image older than an applied migration is safe only when that migration was additive. The demo database is disposable: reset the scenario, or wipe the volume and re-seed.
 
