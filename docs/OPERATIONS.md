@@ -64,14 +64,13 @@ A Lightsail snapshot captures `.env`; never share one. To rotate the API key, re
 No endpoints found that can handle the requested parameters
 ```
 
-`PlacementAdvisor` sends `temperature: 0` unconditionally and sets `require_parameters: true` only when `OPENROUTER_PROVIDER` is blank. That flag restricts routing to providers supporting every parameter sent. Reasoning models accept no `temperature` — for `openai/gpt-5.6-sol`, neither OpenAI nor Azure lists it — so a blank provider leaves no eligible endpoint. Pinning a provider sets `require_parameters: false`, stops the filtering, and the call succeeds.
+`PlacementAdvisor` sends `max_completion_tokens` and sets `require_parameters: true` only when `OPENROUTER_PROVIDER` is blank. That flag restricts routing to providers advertising every parameter sent, and `max_completion_tokens` is an OpenAI-ism — the rest of the ecosystem exposes `max_tokens`. All 31 endpoints serving `z-ai/glm-5.2` support `max_tokens`; **none** support `max_completion_tokens`, so a blank provider matches nothing. OpenAI's own models are the exception, which is why `gpt-4o-mini` worked with a blank provider. Pinning any provider sets `require_parameters: false` and stops the filtering.
 
-- Non-reasoning models (`openai/gpt-4o-mini`): leave the provider blank. Fallbacks stay enabled, which is more robust.
-- Reasoning models (`openai/gpt-5.6-sol`): a provider pin is required, and disables fallbacks as a side effect.
+The second trap is that advertising `structured_outputs` does not mean enforcing it. Novita returned `{"placements":{"placements":[…]}}` with unbalanced braces — double-nested and not valid JSON — which surfaces as `OpenRouter returned an invalid placement plan`. Baidu, DeepInfra, z-ai, and sail-research all returned correct output for the identical request. Validate a new provider with one real putaway before trusting it; the schema is a hint to some backends, not a contract.
 
-The real fix is to stop sending `temperature` to models that do not accept it, at which point a blank provider would work everywhere. Until then the pairing is load-bearing and should be changed as a pair.
+The proper fix is to send `max_tokens` instead of `max_completion_tokens`, after which a blank provider would work and fallbacks would span all 31 providers instead of the single pinned one. Until then a pin is required and the two variables must be changed together.
 
-Model choice is also the main cost lever: `gpt-5.6-sol` costs $2.50/$15.00 per million tokens against `gpt-4o-mini` at $0.15/$0.60 — roughly 17× input and 25× output.
+Model choice is the main cost lever. `z-ai/glm-5.2` runs about $0.0003 per planning call ($0.49/$1.54 per million tokens) against `openai/gpt-5.6-sol` at $2.50/$15.00.
 
 ### Cost control
 
