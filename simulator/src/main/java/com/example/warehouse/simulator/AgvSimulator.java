@@ -171,6 +171,10 @@ class AgvSimulator {
       activeOrder = order.orderId();
       activeOrderPayload.set(order);
       cancelRequested = false;
+      // Instant actions belong to the order they were issued against. Reporting a
+      // finished cancelOrder alongside a freshly accepted order tells the master
+      // control that this order was cancelled too.
+      instantActionStates = List.of();
       publishHandling();
       telemetry("ORDER_ACCEPTED", "order=" + order.orderId() + " nodes=" + order.nodes().size());
       long epoch = simulationEpoch.get();
