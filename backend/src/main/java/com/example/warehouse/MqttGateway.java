@@ -24,6 +24,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 class MqttGateway {
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MqttGateway.class);
   private final ObjectMapper mapper;
   private final WarehouseStore store;
   private final JobExecutionService execution;
@@ -75,15 +76,35 @@ class MqttGateway {
 
   @Scheduled(fixedDelay = 250, initialDelay = 2500)
   void publishOutbox() {
-    if (!client.isConnected()) return;
+    // A disconnected broker stalls every command in the system, and used to do so in
+    // complete silence. Logged at debug so a healthy demo stays quiet, because this
+    // runs every 250 ms.
+    if (!client.isConnected()) {
+      if (log.isDebugEnabled()) {
+        try (var scope = LogContext.of(LogContext.EVENT, "OUTBOX_STALLED")
+            .and(LogContext.REASON, "BROKER_DISCONNECTED").open()) {
+          log.debug("outbox not drained: MQTT client is not connected");
+        }
+      }
+      return;
+    }
     for (WarehouseStore.OutboxRow row : store.pendingOutbox()) {
       try {
         client.publish(row.topic(), row.payload().getBytes(StandardCharsets.UTF_8), row.qos(), false);
         store.sent(row.id());
         metrics.outboxPublished();
+        try (var scope = LogContext.of(LogContext.EVENT, "OUTBOX_PUBLISHED").open()) {
+          log.debug("published {} (qos {})", row.topic(), row.qos());
+        }
       } catch (Exception exception) {
         store.failed(row.id());
         metrics.outboxFailed();
+        // Warn, not debug: delivery is at-least-once and this is the moment a command
+        // failed to leave the building. The break means everything behind it waits.
+        try (var scope = LogContext.of(LogContext.EVENT, "OUTBOX_PUBLISH_FAILED")
+            .and(LogContext.REASON, exception.getClass().getSimpleName()).open()) {
+          log.warn("could not publish {}: {}", row.topic(), String.valueOf(exception.getMessage()));
+        }
         break;
       }
     }
@@ -201,6 +222,13 @@ class MqttGateway {
       events.publish("AGV_UPDATED", agv);
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
+      try (var scope = LogContext.of(LogContext.EVENT, "AGV_MESSAGE_REJECTED")
+          .and(LogContext.REASON, exception.getClass().getSimpleName())
+          .and(LogContext.VEHICLE_ID, serialFromTopic(topic)).open()) {
+        // Inbound validation failures must not mutate domain state, so this log line
+        // and the event below are the only trace they leave.
+        log.warn("rejected inbound {}: {}", topic, String.valueOf(exception.getMessage()));
+      }
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
@@ -227,6 +255,13 @@ class MqttGateway {
       if (current.velocity() > 0.01 && speed <= 0.01 && current.taskId() == null) execution.agvIdle();
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
+      try (var scope = LogContext.of(LogContext.EVENT, "AGV_MESSAGE_REJECTED")
+          .and(LogContext.REASON, exception.getClass().getSimpleName())
+          .and(LogContext.VEHICLE_ID, serialFromTopic(topic)).open()) {
+        // Inbound validation failures must not mutate domain state, so this log line
+        // and the event below are the only trace they leave.
+        log.warn("rejected inbound {}: {}", topic, String.valueOf(exception.getMessage()));
+      }
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
@@ -249,6 +284,13 @@ class MqttGateway {
       if ("CHARGING".equals(phase) || "PARKED".equals(phase)) execution.agvIdle();
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
+      try (var scope = LogContext.of(LogContext.EVENT, "AGV_MESSAGE_REJECTED")
+          .and(LogContext.REASON, exception.getClass().getSimpleName())
+          .and(LogContext.VEHICLE_ID, serialFromTopic(topic)).open()) {
+        // Inbound validation failures must not mutate domain state, so this log line
+        // and the event below are the only trace they leave.
+        log.warn("rejected inbound {}: {}", topic, String.valueOf(exception.getMessage()));
+      }
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
@@ -269,6 +311,13 @@ class MqttGateway {
       if ("ONLINE".equals(connection.connectionState())) publishControl("SYNC", store.runtime(), serialFromTopic(topic));
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
+      try (var scope = LogContext.of(LogContext.EVENT, "AGV_MESSAGE_REJECTED")
+          .and(LogContext.REASON, exception.getClass().getSimpleName())
+          .and(LogContext.VEHICLE_ID, serialFromTopic(topic)).open()) {
+        // Inbound validation failures must not mutate domain state, so this log line
+        // and the event below are the only trace they leave.
+        log.warn("rejected inbound {}: {}", topic, String.valueOf(exception.getMessage()));
+      }
       events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }

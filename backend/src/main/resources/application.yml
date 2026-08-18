@@ -9,6 +9,20 @@ spring:
     password: ${DATABASE_PASSWORD:warehouse}
   flyway:
     locations: classpath:db/migration
+logging:
+  # Console keeps the readable Spring pattern so a live demo and `docker compose logs`
+  # stay scannable; the file carries ECS JSON for jq. Spring Boot configures the two
+  # independently, which is why both are possible without a second appender.
+  file:
+    name: ${LOG_FILE:/var/log/warehouse/backend.json}
+  structured:
+    format:
+      file: ecs
+    json:
+      context:
+        # MDC is where correlationId, orderId, taskId, vehicleId and loadId live, so
+        # including it is what makes a record queryable rather than just readable.
+        include: true
 management:
   endpoints:
     web:

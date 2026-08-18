@@ -18,9 +18,12 @@ class WarehouseController {
   private final PlanningService planning;
   private final OperationsService operations;
   private final IdempotencyService idempotency;
+  private final ClientLogService clientLogs;
 
-  WarehouseController(WarehouseStore store, PlanningService planning, OperationsService operations, IdempotencyService idempotency) {
-    this.store = store; this.planning = planning; this.operations = operations; this.idempotency = idempotency;
+  WarehouseController(WarehouseStore store, PlanningService planning, OperationsService operations,
+      IdempotencyService idempotency, ClientLogService clientLogs) {
+    this.store = store; this.planning = planning; this.operations = operations;
+    this.idempotency = idempotency; this.clientLogs = clientLogs;
   }
 
   @GetMapping("/warehouses/linz/snapshot")
@@ -83,6 +86,15 @@ class WarehouseController {
 
   @PostMapping("/warehouses/linz/transport-orders/{id}/cancel")
   ApiModels.TransportOrderView cancelTransportOrder(@PathVariable("id") UUID id) { return operations.cancel(id); }
+
+  /** Accepts diagnostics the browser buffered so the operator's view and the server's
+   * land in one stream. Returns 202 with no body: a page reporting a problem must not
+   * be made to wait on, or reason about, the reply. */
+  @PostMapping("/client-logs")
+  ResponseEntity<Void> clientLogs(@Valid @RequestBody ApiModels.ClientLogRequest request) {
+    clientLogs.record(request.entries());
+    return ResponseEntity.accepted().build();
+  }
 
   @PostMapping("/warehouses/linz/operations/pause")
   ApiModels.RuntimeView pause() { return operations.pause(); }

@@ -49,6 +49,10 @@ services:
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       OPENROUTER_PROVIDER: ${OPENROUTER_PROVIDER:-}
       OPENROUTER_TIMEOUT_SECONDS: ${OPENROUTER_TIMEOUT_SECONDS:-60}
+    # Bind mount rather than a named volume: the point of the JSON log is to be
+    # queryable with jq from the host without going through docker at all.
+    volumes:
+      - ./logs:/var/log/warehouse
     depends_on:
       postgres: { condition: service_healthy }
       mosquitto: { condition: service_healthy }
@@ -72,6 +76,8 @@ services:
       AGV_ACCELERATION: ${AGV_ACCELERATION:-1.0}
       AGV_BRAKING: ${AGV_BRAKING:-1.5}
       AGV_BATTERY_CONSUMPTION_PER_METRE: ${AGV_BATTERY_CONSUMPTION_PER_METRE:-0.015}
+    volumes:
+      - ./logs:/var/log/warehouse
     depends_on:
       mosquitto: { condition: service_healthy }
       backend: { condition: service_healthy }

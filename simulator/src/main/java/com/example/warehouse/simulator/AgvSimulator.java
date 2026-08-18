@@ -226,6 +226,18 @@ class AgvSimulator {
     } catch (Exception exception) {
       if (cancelRequested) {
         velocity = 0;
+        // Put the pallet down, the same two lines handleDrop uses. Cancelling returns the
+        // load to its source in the domain, so a fork that keeps reporting it contradicts
+        // the backend -- and handling telemetry is latest-value-wins, so updateHandling
+        // wrote the load straight back onto the vehicle a few hundred milliseconds after
+        // completeCancellation had cleared it. The result was an AGV parked at the charger
+        // holding a pallet with no task, and a load stranded in IN_TRANSIT: not INBOUND so
+        // it could not be put away again, not STORED so it could never ship.
+        carriedLoadId = null;
+        forkHeight = 0;
+        forkExtension = 0;
+        handlingPhase = "IDLE";
+        publishHandling();
         publishVisualization(0);
         telemetry("ORDER_CANCELLED", "order=" + order.orderId());
       } else System.err.println("Order failed: " + exception.getMessage());
@@ -569,8 +581,47 @@ class AgvSimulator {
     try { return mapper.writeValueAsBytes(value); } catch (Exception exception) { throw new IllegalStateException(exception); }
   }
 
+  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgvSimulator.class);
+
+  /** The vehicle's side of the story, in the same vocabulary the backend uses.
+   *
+   * <p>This printed "ANIMATION <instant> <event> <details>" straight to stdout, which
+   * carried no level, no correlation and no structure, so following one order across
+   * the vehicle and the backend meant matching wall-clock timestamps by eye between
+   * two container logs. Routing it through SLF4J with the event in MDC puts it in the
+   * same ECS file as everything else, queryable by the same fields.
+   *
+   * <p>The "ANIMATION" prefix is kept because it is what makes the vehicle's own
+   * narration easy to pick out of {@code docker compose logs simulator} by eye --
+   * following one order that way is how the base/horizon stall was first spotted.
+   * Nothing parses it, so it is a convenience rather than a contract. */
   private static void telemetry(String event, String details) {
-    System.out.println("ANIMATION " + java.time.Instant.now() + " " + event + " " + details);
+    // Promote the order id out of the details text into its own field. Left in the
+    // message it is greppable but not selectable, so `jq 'select(.taskId==…)'` over
+    // both log files returned backend records only and silently under-reported the
+    // vehicle's side of the same task -- which is the correlation this exists for.
+    String taskId = orderIdFrom(details);
+    try (org.slf4j.MDC.MDCCloseable ignored = org.slf4j.MDC.putCloseable("event", event);
+        org.slf4j.MDC.MDCCloseable source = org.slf4j.MDC.putCloseable("source", "simulator")) {
+      if (taskId == null) {
+        log.info("ANIMATION {} {} {}", java.time.Instant.now(), event, details);
+        return;
+      }
+      try (org.slf4j.MDC.MDCCloseable task = org.slf4j.MDC.putCloseable("taskId", taskId)) {
+        log.info("ANIMATION {} {} {}", java.time.Instant.now(), event, details);
+      }
+    }
+  }
+
+  /** The backend names a transport task; the vehicle calls the same thing an order.
+   * Every call site that has one already writes it as {@code order=<uuid>}. */
+  private static final java.util.regex.Pattern ORDER_TOKEN =
+      java.util.regex.Pattern.compile("\\border=([0-9a-fA-F-]{36})\\b");
+
+  private static String orderIdFrom(String details) {
+    if (details == null) return null;
+    java.util.regex.Matcher matcher = ORDER_TOKEN.matcher(details);
+    return matcher.find() ? matcher.group(1) : null;
   }
 
   @PreDestroy

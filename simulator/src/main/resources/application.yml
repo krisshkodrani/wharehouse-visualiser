@@ -3,6 +3,15 @@ spring:
     name: warehouse-agv-simulator
   main:
     web-application-type: none
+logging:
+  file:
+    name: ${LOG_FILE:/var/log/warehouse/simulator.json}
+  structured:
+    format:
+      file: ecs
+    json:
+      context:
+        include: true
 warehouse:
   mqtt-url: ${MQTT_URL:tcp://localhost:1883}
   mqtt-user: ${MQTT_USER:warehouse}

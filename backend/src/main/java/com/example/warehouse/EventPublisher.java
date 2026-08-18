@@ -1,10 +1,13 @@
 package com.example.warehouse;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
 @Component
 class EventPublisher {
+  private static final Logger log = LoggerFactory.getLogger(EventPublisher.class);
   private final SimpMessagingTemplate messaging;
   private final WarehouseStore store;
   private final java.util.concurrent.atomic.AtomicLong epoch = new java.util.concurrent.atomic.AtomicLong(-1);
@@ -16,6 +19,7 @@ class EventPublisher {
       epoch.set(current);
     }
     messaging.convertAndSend("/topic/warehouses/linz", ApiModels.event(type, current, payload));
+    record(type, null, current);
   }
 
   void publish(String type, String eventType, String entityId, String correlationId, Object payload) {
@@ -26,5 +30,19 @@ class EventPublisher {
     }
     messaging.convertAndSend("/topic/warehouses/linz",
         ApiModels.event(type, eventType, entityId, correlationId, current, ApiModels.EVENT_PAYLOAD_VERSION, payload));
+    record(type, entityId, current);
+  }
+
+  /** Every domain event the UI receives passes through here, which makes this the one
+   * place that can log the domain narrative without touching the twenty-odd call
+   * sites that raise them. The payload is deliberately not logged: it ranges from a
+   * single id to a full order projection, and a log line that sometimes carries a
+   * whole snapshot is one nobody can read or query. */
+  private void record(String type, String entityId, long epoch) {
+    try (var scope = LogContext.of(LogContext.EVENT, type)
+        .and(LogContext.EPOCH, epoch)
+        .and("entityId", entityId).open()) {
+      log.info("domain event");
+    }
   }
 }

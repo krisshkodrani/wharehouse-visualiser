@@ -56,6 +56,11 @@ public final class ApiModels {
   public record TransportOrderRequest(@NotBlank String type, @NotBlank String priority, @NotEmpty List<String> loadIds, String objective) {}
   public record ScenarioRequest(@NotBlank String presetId) {}
   public record SpeedRequest(@Min(1) @Max(4) int multiplier) {}
+  /** One buffered browser diagnostic. Everything is optional because the page must be
+   * able to report a failure that happened before it knew what it was working on. */
+  public record ClientLogEntry(String level, String event, String message, String correlationId,
+      String orderId, String taskId, String vehicleId, String loadId) {}
+  public record ClientLogRequest(@NotEmpty List<ClientLogEntry> entries) {}
 
   /** A storage slot the planner may choose. {@code aisleId} is what lets an operator
    * instruction like "aisle B" be enforced by filtering rather than hoped for. */
