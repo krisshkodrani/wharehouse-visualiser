@@ -88,8 +88,15 @@ export default class WarehouseApi {
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(path, init);
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: response.statusText })) as { error?: string };
-      throw new Error(error.error || `Request failed with ${response.status}`);
+      // The backend answers handled failures with RFC 9457 Problem Details, where the
+      // human-readable reason is `detail`. Reading only `error` -- which exists solely
+      // on Spring's default shape for unhandled routes -- discarded every message the
+      // API deliberately wrote, so a refused outbound surfaced as a bare "Request
+      // failed with 400" instead of "Every outbound load must be stored and available".
+      const problem = await response.json().catch(() => ({})) as
+        { detail?: string; title?: string; error?: string; message?: string };
+      const reason = problem.detail ?? problem.message ?? problem.error ?? problem.title ?? response.statusText;
+      throw new Error(reason || `Request failed with ${response.status}`);
     }
     return response.json() as Promise<T>;
   }
