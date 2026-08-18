@@ -4,8 +4,17 @@ All notable changes are documented here. The project follows Semantic Versioning
 
 ## Unreleased
 
+## 0.2.0 - 2026-08-18
+
 ### Added
 
+- Public deployment topology (`compose.prod.yaml`): images pulled from GHCR by pinned tag,
+  Caddy terminating TLS as the only publicly bound service, per-service memory limits and
+  JVM heap caps sized for a 2 GB host, and restart policies so the stack survives a reboot.
+- Rate limiting on the two routes that reach the LLM (`docker/nginx.prod.conf`), keyed so
+  that only POSTs are counted and read traffic passes free.
+- `.env.production.example` documenting the deployment variables, with required values
+  guarded by `${VAR:?}` so a missing secret fails the deploy rather than a later request.
 - Story view as the default screen: the 3D warehouse fills the viewport, with a narrated
   "now" line, a six-stage Order to Done pipeline strip, and a VDA protocol proof line.
   Engineer view keeps the full control tower one click away and the choice persists.
