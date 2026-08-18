@@ -36,6 +36,7 @@ class MqttGateway {
   private final ConcurrentHashMap<String, InboundMessage> latestVisualizations = new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, InboundMessage> latestHandlings = new ConcurrentHashMap<>();
   private final ConcurrentHashMap<String, ApiModels.AgvView> liveAgvs = new ConcurrentHashMap<>();
+  private final java.util.Set<String> handledInstantActions = ConcurrentHashMap.newKeySet();
   private final AtomicLong instantActionHeader = new AtomicLong();
 
   private record InboundMessage(String topic, MqttMessage message) {}
@@ -95,7 +96,9 @@ class MqttGateway {
   private void publishControl(String command, ApiModels.RuntimeView runtime, String agvId) {
     if (!client.isConnected()) return;
     try {
-      String homeId = switch (agvId) { case "FL-02" -> "PARK-02"; case "FL-03" -> "PARK-03"; default -> "PARK-01"; };
+      // V20 made the fleet single-vehicle, so PARK-01 is the only home. A second
+      // vehicle needs more than another parking id — see docs/ARCHITECTURE.md.
+      String homeId = "PARK-01";
       WarehouseStore.NodeRow home = store.locationPosition(homeId);
       ApiModels.AgvView agv = store.agv(agvId);
       boolean reset = "RESET".equals(command);
@@ -168,7 +171,8 @@ class MqttGateway {
     liveAgvs.forEach((id, agv) -> store.updateAgvMotion(id, agv.x(), agv.z(), agv.theta(), agv.velocity(), agv.status(), agv.taskId()));
   }
 
-  private void onState(String topic, MqttMessage message) {
+  // Package-private so MqttGatewayTest can drive a state snapshot without a broker.
+  void onState(String topic, MqttMessage message) {
     try {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("state", json);
@@ -178,9 +182,9 @@ class MqttGateway {
       if (state.powerSupply() != null) store.updatePower(agvId, state.powerSupply().stateOfCharge(), state.powerSupply().charging());
       UUID jobId = uuid(state.orderId());
       if (jobId != null) {
-        if (hasInstantAction(state, "cancelOrder", "FINISHED")) {
+        if (consumeInstantAction(state, "cancelOrder")) {
           execution.cancelled(jobId);
-          ApiModels.AgvView agv = store.agv(agvId);
+          ApiModels.AgvView agv = withLivePose(store.agv(agvId), liveAgvs.get(agvId));
           liveAgvs.put(agvId, agv);
           events.publish("AGV_UPDATED", agv);
           return;
@@ -192,16 +196,17 @@ class MqttGateway {
           execution.completeIfArrived(jobId, state.lastNodeId());
         if (state.newBaseRequest()) execution.releaseNext(jobId);
       }
-      ApiModels.AgvView agv = store.agv(agvId);
+      ApiModels.AgvView agv = withLivePose(store.agv(agvId), liveAgvs.get(agvId));
       liveAgvs.put(agvId, agv);
       events.publish("AGV_UPDATED", agv);
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
-      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
+      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
 
-  private void onVisualization(String topic, MqttMessage message) {
+  // Package-private for MqttGatewayTest; see onState.
+  void onVisualization(String topic, MqttMessage message) {
     try {
       String json = new String(message.getPayload(), StandardCharsets.UTF_8);
       validator.validate("visualization", json);
@@ -222,7 +227,7 @@ class MqttGateway {
       if (current.velocity() > 0.01 && speed <= 0.01 && current.taskId() == null) execution.agvIdle();
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
-      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
+      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
 
@@ -238,13 +243,13 @@ class MqttGateway {
       String loadId = nullable(value.get("loadId"));
       String stationId = nullable(value.get("stationId"));
       store.updateHandling(agvId, phase, forkHeight, forkExtension, loadId, stationId);
-      ApiModels.AgvView agv = store.agv(agvId);
+      ApiModels.AgvView agv = withLivePose(store.agv(agvId), liveAgvs.get(agvId));
       liveAgvs.put(agvId, agv);
       events.publish("AGV_HANDLING_UPDATED", agv);
       if ("CHARGING".equals(phase) || "PARKED".equals(phase)) execution.agvIdle();
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
-      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
+      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
 
@@ -264,7 +269,7 @@ class MqttGateway {
       if ("ONLINE".equals(connection.connectionState())) publishControl("SYNC", store.runtime(), serialFromTopic(topic));
     } catch (Exception exception) {
       metrics.mqttRejected(topic);
-      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", exception.getMessage()));
+      events.publish("AGV_MESSAGE_REJECTED", java.util.Map.of("topic", topic, "error", String.valueOf(exception.getMessage())));
     }
   }
 
@@ -272,17 +277,61 @@ class MqttGateway {
     try { return value == null || value.isBlank() ? null : UUID.fromString(value); } catch (IllegalArgumentException ignored) { return null; }
   }
 
+  /**
+   * Extracts the vehicle serial from a VDA 5050 topic.
+   *
+   * <p>The layout is {@code vda5050/<major>/<manufacturer>/<serial>/<messageType>}, so the serial is
+   * segment 3. Reading segment 4 returned the message type instead, and every inbound telemetry
+   * handler then looked up a vehicle called "state"/"visualization"/"handling", threw, and aborted —
+   * poses, battery, and handling phases never reached the database or the browser.
+   */
   private static String serialFromTopic(String topic) {
     String[] parts = topic.split("/");
-    return parts.length >= 5 ? parts[4] : "FL-01";
+    return parts.length >= 5 ? parts[3] : Vda5050.SERIAL_NUMBER;
   }
 
   private static boolean hasAction(Vda5050.State state, String type, String status) {
     return state.actionStates().stream().anyMatch(action -> type.equals(action.get("actionType")) && status.equals(action.get("actionStatus")));
   }
 
-  private static boolean hasInstantAction(Vda5050.State state, String type, String status) {
-    return state.instantActionStates().stream().anyMatch(action -> type.equals(action.get("actionType")) && status.equals(action.get("actionStatus")));
+  /**
+   * Consumes a finished instant action exactly once.
+   *
+   * <p>A VDA 5050 state message is a full snapshot, not an event: a vehicle keeps
+   * reporting an instant action's terminal status in every later state message, and
+   * the action outlives the order it was issued against. Reacting to its mere
+   * presence therefore re-executes the command forever — a lingering finished
+   * {@code cancelOrder} cancelled every subsequent order within one state tick, so
+   * the fleet dispatched and cancelled in a loop and never moved. Action ids are
+   * unique per command, so tracking the ones already handled makes the reaction
+   * idempotent no matter how long the vehicle repeats them.
+   */
+  private boolean consumeInstantAction(Vda5050.State state, String type) {
+    String actionId = state.instantActionStates().stream()
+        .filter(action -> type.equals(action.get("actionType")) && "FINISHED".equals(action.get("actionStatus")))
+        .map(action -> String.valueOf(action.get("actionId")))
+        .filter(id -> !handledInstantActions.contains(id))
+        .findFirst().orElse(null);
+    if (actionId == null) return false;
+    // Ids are random UUIDs and only one is minted per command, so the set grows
+    // slowly; clear it wholesale rather than tracking insertion order.
+    if (handledInstantActions.size() > 512) handledInstantActions.clear();
+    return handledInstantActions.add(actionId);
+  }
+
+  /**
+   * Keeps the live pose while taking lifecycle columns from the database.
+   *
+   * <p>The database row is only as fresh as the last {@link #persistLivePose} tick,
+   * so publishing it verbatim rewinds the vehicle by up to half a second on every
+   * state or handling message, which reads as stutter in the 3D view and undoes the
+   * interpolation the client just applied.
+   */
+  private ApiModels.AgvView withLivePose(ApiModels.AgvView stored, ApiModels.AgvView live) {
+    if (live == null) return stored;
+    return new ApiModels.AgvView(stored.id(), live.x(), live.z(), live.theta(), live.velocity(),
+        stored.battery(), stored.status(), stored.taskId(), stored.charging(), stored.currentStationId(),
+        stored.handlingPhase(), stored.forkHeight(), stored.forkExtension(), stored.carriedLoadId());
   }
 
   @PreDestroy void close() throws Exception {
