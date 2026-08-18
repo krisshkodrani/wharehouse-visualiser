@@ -18,7 +18,7 @@ class JobExecutionService {
   @Transactional
   public void executing(UUID jobId) {
     store.job(jobId).ifPresent(job -> {
-      store.markExecuting(jobId);
+      store.markExecuting(jobId, job.assignedAgvId());
       metrics.taskTransition("EXECUTING");
       events.publish("TRANSPORT_TASK_UPDATED", new ApiModels.JobView(job.id(), job.transportOrderId(), job.sequence(), job.loadId(), job.source(), job.destination(), "EXECUTING", job.route()));
     });
@@ -27,8 +27,8 @@ class JobExecutionService {
   @Transactional
   public void picked(UUID jobId) {
     store.job(jobId).ifPresent(job -> {
-      store.markPicked(jobId);
-      store.markExecuting(jobId);
+      store.markPicked(jobId, job.assignedAgvId());
+      store.markExecuting(jobId, job.assignedAgvId());
       events.publish("LOAD_PICKED", store.snapshot());
     });
   }

@@ -12,6 +12,10 @@ public final class Vda5050 {
   public static final String SERIAL_NUMBER = "FL-01";
   public static final String TOPIC_PREFIX = "vda5050/v3/" + MANUFACTURER + "/" + SERIAL_NUMBER;
 
+  public static String topicPrefix(String serialNumber) {
+    return "vda5050/v3/" + MANUFACTURER + "/" + serialNumber;
+  }
+
   private Vda5050() {}
 
   public record AllowedDeviationXY(double a, double b, double theta) {}

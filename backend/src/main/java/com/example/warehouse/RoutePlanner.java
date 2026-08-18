@@ -25,6 +25,10 @@ class RoutePlanner {
     return routeNodes(store.nearestNodeToAgv().id(), store.nodeForLocation(destinationLocation));
   }
 
+  List<String> routeFromAgv(String destinationLocation, String agvId) {
+    return routeNodes(store.nearestNodeToAgv(agvId).id(), store.nodeForLocation(destinationLocation));
+  }
+
   List<String> routeFromAgvToNode(String destinationNode) {
     return routeNodes(store.nearestNodeToAgv().id(), destinationNode);
   }
@@ -73,7 +77,9 @@ class RoutePlanner {
     return Math.hypot(a.x() - b.x(), a.z() - b.z());
   }
 
-  private static boolean segmentPassable(WarehouseStore.NodeRow from, WarehouseStore.NodeRow to,
+  /** Package-private so {@link LayoutValidator} can assert every declared map edge
+   * survives the same clearance check the planner applies. */
+  static boolean segmentPassable(WarehouseStore.NodeRow from, WarehouseStore.NodeRow to,
       List<WarehouseStore.PhysicalObstacle> obstacles) {
     double distance = Math.hypot(to.x() - from.x(), to.z() - from.z());
     int samples = Math.max(1, (int) Math.ceil(distance / COLLISION_SAMPLE_STEP));

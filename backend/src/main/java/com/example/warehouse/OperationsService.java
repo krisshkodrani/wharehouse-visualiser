@@ -70,13 +70,6 @@ class OperationsService {
     return order;
   }
 
-  void demoEvent(ApiModels.DemoEventRequest request) {
-    String type = request.type().trim().toUpperCase(java.util.Locale.ROOT);
-    if (!java.util.Set.of("VDA_REJECTION", "BLOCK_ROUTE").contains(type)) throw new IllegalArgumentException("Unsupported demo event");
-    events.publish(type, java.util.Map.of("taskId", request.taskId() == null ? "" : request.taskId().toString(),
-        "message", "VDA_REJECTION".equals(type) ? "Order rejected: unsupported demo action parameter" : "Route blocked; replanning requested"));
-  }
-
   @Transactional
   ApiModels.RuntimeView pause() {
     ApiModels.RuntimeView runtime = store.setRuntime("PAUSED");

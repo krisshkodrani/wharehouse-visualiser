@@ -26,10 +26,12 @@ import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
 class AgvSimulator {
+  private final String serialNumber;
   private final ObjectMapper mapper;
   private final VdaSchemaValidator validator;
   private final MqttClient client;
@@ -71,6 +73,7 @@ class AgvSimulator {
   private volatile String telemetryLoadId;
   private volatile Vda5050.Position position = new Vda5050.Position(11, -6, 0, "linz", true);
 
+  @Autowired
   AgvSimulator(ObjectMapper mapper,
       @Value("${warehouse.mqtt-url}") String url,
       @Value("${warehouse.mqtt-user}") String user,
@@ -81,18 +84,25 @@ class AgvSimulator {
       @Value("${warehouse.acceleration:1.0}") double acceleration,
       @Value("${warehouse.braking:1.5}") double braking,
       @Value("${warehouse.battery-consumption-per-metre:0.015}") double batteryConsumptionPerMetre) throws Exception {
+    this(mapper, "FL-01", url, user, password, emptySpeed, loadedSpeed, dockingSpeed, acceleration, braking, batteryConsumptionPerMetre);
+  }
+
+  AgvSimulator(ObjectMapper mapper, String serialNumber, String url, String user, String password,
+      double emptySpeed, double loadedSpeed, double dockingSpeed, double acceleration, double braking,
+      double batteryConsumptionPerMetre) throws Exception {
+    this.serialNumber = serialNumber;
     this.mapper = mapper; this.validator = new VdaSchemaValidator(mapper); this.emptySpeed = emptySpeed;
     this.loadedSpeed = loadedSpeed; this.dockingSpeed = dockingSpeed; this.acceleration = acceleration; this.braking = braking;
     BatteryModel.consume(100, 0, batteryConsumptionPerMetre);
     this.batteryConsumptionPerMetre = batteryConsumptionPerMetre;
-    this.client = new MqttClient(url, "agv-FL-01", new MemoryPersistence());
+    this.client = new MqttClient(url, "agv-" + serialNumber, new MemoryPersistence());
     this.options = new MqttConnectOptions();
     options.setCleanSession(true);
     options.setAutomaticReconnect(true);
     options.setUserName(user);
     options.setPassword(password.toCharArray());
     options.setConnectionTimeout(10);
-    options.setWill(Vda5050.TOPIC_PREFIX + "/connection", bytes(connection("CONNECTION_BROKEN")), 1, true);
+    options.setWill(Vda5050.topicPrefix(serialNumber) + "/connection", bytes(connection("CONNECTION_BROKEN")), 1, true);
   }
 
   @PostConstruct
@@ -135,7 +145,7 @@ class AgvSimulator {
   }
 
   private void subscribeTopics() throws Exception {
-    client.subscribe(new String[] {Vda5050.TOPIC_PREFIX + "/order", Vda5050.TOPIC_PREFIX + "/instantActions", Vda5050.TOPIC_PREFIX + "/control"}, new int[] {1, 1, 1});
+    client.subscribe(new String[] {Vda5050.topicPrefix(serialNumber) + "/order", Vda5050.topicPrefix(serialNumber) + "/instantActions", Vda5050.topicPrefix(serialNumber) + "/control"}, new int[] {1, 1, 1});
     telemetry("MQTT_SUBSCRIBED", "topics=order,instantActions,control");
   }
 
@@ -161,6 +171,10 @@ class AgvSimulator {
       activeOrder = order.orderId();
       activeOrderPayload.set(order);
       cancelRequested = false;
+      // Instant actions belong to the order they were issued against. Reporting a
+      // finished cancelOrder alongside a freshly accepted order tells the master
+      // control that this order was cancelled too.
+      instantActionStates = List.of();
       publishHandling();
       telemetry("ORDER_ACCEPTED", "order=" + order.orderId() + " nodes=" + order.nodes().size());
       long epoch = simulationEpoch.get();
@@ -463,7 +477,7 @@ class AgvSimulator {
     boolean newBaseRequest = order != null && nodeStates.stream().anyMatch(node -> Boolean.FALSE.equals(node.get("released")))
         && nodeStates.stream().noneMatch(node -> Boolean.TRUE.equals(node.get("released")));
     Vda5050.State state = new Vda5050.State(stateHeader.incrementAndGet(), Vda5050.now(), Vda5050.VERSION,
-        Vda5050.MANUFACTURER, Vda5050.SERIAL_NUMBER, orderId, order == null ? 0 : order.orderUpdateId(), lastNode, sequence,
+        Vda5050.MANUFACTURER, serialNumber, orderId, order == null ? 0 : order.orderUpdateId(), lastNode, sequence,
         driving, paused, newBaseRequest, "AUTOMATIC", position, new Vda5050.PowerSupply(battery, charging), nodeStates,
         edgeStates, actions, instantActionStates, List.of(), new Vda5050.SafetyState("NONE", false));
     publish("state", state, 0, false);
@@ -476,7 +490,7 @@ class AgvSimulator {
 
   private void sendVisualization() throws Exception {
     Vda5050.Visualization visualization = new Vda5050.Visualization(visualizationHeader.incrementAndGet(), Vda5050.now(),
-        Vda5050.VERSION, Vda5050.MANUFACTURER, Vda5050.SERIAL_NUMBER, stateHeader.get(), position,
+        Vda5050.VERSION, Vda5050.MANUFACTURER, serialNumber, stateHeader.get(), position,
         new Vda5050.Velocity(velocity, 0, 0));
     publish("visualization", visualization, 0, false);
   }
@@ -496,7 +510,7 @@ class AgvSimulator {
     value.put("forkExtension", forkExtension);
     value.put("loadId", telemetryLoadId);
     value.put("stationId", currentStationId);
-    client.publish(Vda5050.TOPIC_PREFIX + "/handling", mapper.writeValueAsBytes(value), 0, false);
+    client.publish(Vda5050.topicPrefix(serialNumber) + "/handling", mapper.writeValueAsBytes(value), 0, false);
   }
 
   private void flushTelemetry() {
@@ -543,12 +557,12 @@ class AgvSimulator {
 
   private Vda5050.Connection connection(String state) {
     return new Vda5050.Connection(stateHeader.incrementAndGet(), Vda5050.now(), Vda5050.VERSION,
-        Vda5050.MANUFACTURER, Vda5050.SERIAL_NUMBER, state);
+        Vda5050.MANUFACTURER, serialNumber, state);
   }
 
   private void publish(String topic, Object value, int qos, boolean retained) throws Exception {
     validator.validate(topic, value);
-    client.publish(Vda5050.TOPIC_PREFIX + "/" + topic, bytes(value), qos, retained);
+    client.publish(Vda5050.topicPrefix(serialNumber) + "/" + topic, bytes(value), qos, retained);
   }
 
   private byte[] bytes(Object value) {

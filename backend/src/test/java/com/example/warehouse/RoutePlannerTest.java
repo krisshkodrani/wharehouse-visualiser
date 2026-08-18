@@ -82,4 +82,47 @@ class RoutePlannerTest {
 
     assertEquals(List.of("W-C", "OUTBOUND"), new RoutePlanner(store).route("SOURCE", "DESTINATION"));
   }
+
+  /** The C-row travel aisle runs at z=10 and the robot cell is guarded on all four
+   * faces. Every storage row must still reach the outbound handoff through the
+   * cell's east gate. Uses the real V21 barrier and node coordinates: an earlier
+   * layout put the cell's north guard at z=10.1, whose 0.72 m clearance envelope
+   * severed the aisle and made outbound routing impossible. */
+  @Test void keepsEveryCRowStorageNodeConnectedToOutboundThroughTheRobotCellGate() {
+    WarehouseStore store = mock(WarehouseStore.class);
+    when(store.nodeForLocation("OUTBOUND-STAGING")).thenReturn("OUTBOUND");
+    when(store.nodes()).thenReturn(List.of(
+        new WarehouseStore.NodeRow("W-C", -18, 10),
+        new WarehouseStore.NodeRow("S-C1", -14, 10),
+        new WarehouseStore.NodeRow("S-C2", -8, 10),
+        new WarehouseStore.NodeRow("S-C3", -2, 10),
+        new WarehouseStore.NodeRow("S-C4", 4, 10),
+        new WarehouseStore.NodeRow("OUT-APR-01", 2.6, 14.4),
+        new WarehouseStore.NodeRow("OUTBOUND", -1.9, 14.4)));
+    when(store.edges()).thenReturn(List.of(
+        new WarehouseStore.EdgeRow("C-W-1", "W-C", "S-C1", 4, true),
+        new WarehouseStore.EdgeRow("C-1-2", "S-C1", "S-C2", 6, true),
+        new WarehouseStore.EdgeRow("C-2-3", "S-C2", "S-C3", 6, true),
+        new WarehouseStore.EdgeRow("C-3-4", "S-C3", "S-C4", 6, true),
+        new WarehouseStore.EdgeRow("C4-OUT-APR", "S-C4", "OUT-APR-01", 4.63, true),
+        new WarehouseStore.EdgeRow("OUT-APR-STG", "OUT-APR-01", "OUTBOUND", 4.5, true)));
+    when(store.physicalObstacles()).thenReturn(List.of(
+        new WarehouseStore.PhysicalObstacle("ROBOT-CELL-N", "BARRIER", -4.1, 11.50, 3.70, .08, 0, 1.4),
+        new WarehouseStore.PhysicalObstacle("ROBOT-CELL-S", "BARRIER", -4.1, 17.30, 3.70, .08, 0, 1.4),
+        new WarehouseStore.PhysicalObstacle("ROBOT-CELL-W-N", "BARRIER", -7.8, 12.10, .08, .60, 0, 1.4),
+        new WarehouseStore.PhysicalObstacle("ROBOT-CELL-W-S", "BARRIER", -7.8, 16.70, .08, .60, 0, 1.4),
+        new WarehouseStore.PhysicalObstacle("ROBOT-CELL-E-N", "BARRIER", -0.4, 12.25, .08, .75, 0, 1.4),
+        new WarehouseStore.PhysicalObstacle("ROBOT-CELL-E-S", "BARRIER", -0.4, 16.55, .08, .75, 0, 1.4)));
+    when(store.nodeForLocation("C1")).thenReturn("S-C1");
+    when(store.nodeForLocation("C2")).thenReturn("S-C2");
+    when(store.nodeForLocation("C3")).thenReturn("S-C3");
+    when(store.nodeForLocation("C4")).thenReturn("S-C4");
+
+    RoutePlanner planner = new RoutePlanner(store);
+    assertEquals(List.of("S-C4", "OUT-APR-01", "OUTBOUND"), planner.route("C4", "OUTBOUND-STAGING"));
+    assertEquals(List.of("S-C3", "S-C4", "OUT-APR-01", "OUTBOUND"), planner.route("C3", "OUTBOUND-STAGING"));
+    assertEquals(List.of("S-C2", "S-C3", "S-C4", "OUT-APR-01", "OUTBOUND"), planner.route("C2", "OUTBOUND-STAGING"));
+    assertEquals(List.of("S-C1", "S-C2", "S-C3", "S-C4", "OUT-APR-01", "OUTBOUND"),
+        planner.route("C1", "OUTBOUND-STAGING"));
+  }
 }

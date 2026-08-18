@@ -7,6 +7,7 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.production.example
 .mvn/apache-maven-*/
 
 .ui5-tooling-modules/

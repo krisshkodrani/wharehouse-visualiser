@@ -17,4 +17,14 @@ class EventPublisher {
     }
     messaging.convertAndSend("/topic/warehouses/linz", ApiModels.event(type, current, payload));
   }
+
+  void publish(String type, String eventType, String entityId, String correlationId, Object payload) {
+    long current = epoch.get();
+    if (current < 0 || type.contains("RESET") || type.equals("SCENARIO_CHANGED")) {
+      current = store.runtime().simulationEpoch();
+      epoch.set(current);
+    }
+    messaging.convertAndSend("/topic/warehouses/linz",
+        ApiModels.event(type, eventType, entityId, correlationId, current, ApiModels.EVENT_PAYLOAD_VERSION, payload));
+  }
 }
