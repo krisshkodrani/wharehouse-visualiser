@@ -72,7 +72,7 @@ class WarehouseStore {
         rs.getString("phase"), rs.getObject("active_pick_job_id", UUID.class), instant(rs, "updated_at")));
     return new ApiModels.WarehouseSnapshot("linz", String.valueOf(warehouse.get("name")),
         ((Number) warehouse.get("width")).doubleValue(), ((Number) warehouse.get("depth")).doubleValue(), racks, locations, loads, agvs, jobs,
-        orders, tasks, scenario(runtime), runtime, transfers, obstacles, cartons, robotCells);
+        orders, tasks, scenario(runtime), runtime, transfers, obstacles, cartons, robotCells, aisles());
   }
 
   ApiModels.RuntimeView runtime() {
@@ -133,10 +133,22 @@ class WarehouseStore {
         (rs, n) -> new ApiModels.IncomingLoad(rs.getString(1), rs.getString(2), rs.getString(3)), ids.toArray());
   }
 
+  /** Eligible storage slots, each carrying the aisle that serves it. The aisle comes
+   * through the slot's rack rather than being stored on the location, so a rack can
+   * be moved between aisles without rewriting every slot beneath it. */
   List<ApiModels.CandidateSlot> candidates() {
-    return jdbc.query("select * from location where warehouse_id='linz' and type='STORAGE' and occupied+reserved < capacity order by id",
+    return jdbc.query("select l.*, a.id as aisle_id, a.name as aisle_name from location l "
+        + "left join rack r on l.rack_id = r.id left join aisle a on r.aisle_id = a.id "
+        + "where l.warehouse_id='linz' and l.type='STORAGE' and l.occupied+l.reserved < l.capacity order by l.id",
         (rs, n) -> new ApiModels.CandidateSlot(rs.getString("id"), rs.getString("name"),
-            rs.getInt("capacity") - rs.getInt("occupied") - rs.getInt("reserved"), rs.getDouble("x"), rs.getDouble("z")));
+            rs.getInt("capacity") - rs.getInt("occupied") - rs.getInt("reserved"), rs.getDouble("x"), rs.getDouble("z"),
+            rs.getString("aisle_id"), rs.getString("aisle_name")));
+  }
+
+  List<ApiModels.AisleView> aisles() {
+    return jdbc.query("select id,name,x,z,rotation_y,length,width from aisle where warehouse_id='linz' order by id",
+        (rs, n) -> new ApiModels.AisleView(rs.getString("id"), rs.getString("name"), rs.getDouble("x"),
+            rs.getDouble("z"), rs.getDouble("rotation_y"), rs.getDouble("length"), rs.getDouble("width")));
   }
 
   void createRequest(UUID id, String type, String prompt, List<String> loadIds) {
@@ -536,8 +548,19 @@ class WarehouseStore {
     jdbc.update("update agv set status='MOVING',task_id=? where id=?", jobId, agvId);
   }
 
+  /** Persists the coalesced live pose. Telemetry is latest-value-wins and lags the
+   * command path by up to one pose interval, so it must never write task_id: the
+   * cached value can name a task that has already completed, and writing it back
+   * left the vehicle PARKED holding a dead task id. Dispatch claims only vehicles
+   * with task_id is null, so that row was permanently unclaimable and every queued
+   * order stalled behind it with nothing in the logs.
+   *
+   * <p>Pose always lands. Status lands only while the cached task still matches the
+   * stored one, which keeps MOVING/IDLE responsive without letting a stale snapshot
+   * overwrite a transition the command path has already made. */
   void updateAgvMotion(String agvId, double x, double z, double theta, double velocity, String status, UUID jobId) {
-    jdbc.update("update agv set x=?,z=?,theta=?,velocity=?,status=?,task_id=? where id=?", x, z, theta, velocity, status, jobId, agvId);
+    jdbc.update("update agv set x=?,z=?,theta=?,velocity=? where id=?", x, z, theta, velocity, agvId);
+    jdbc.update("update agv set status=? where id=? and task_id is not distinct from ?", status, agvId, jobId);
   }
 
   void updatePower(String agvId, double battery, boolean charging) {
@@ -746,7 +769,7 @@ class WarehouseStore {
     var routeNodes = nodes().stream().map(node -> Map.<String, Object>of("id", node.id(), "x", node.x(), "z", node.z())).toList();
     var routeEdges = edges().stream().map(edge -> Map.<String, Object>of("id", edge.id(), "from", edge.from(), "to", edge.to(),
         "bidirectional", edge.bidirectional())).toList();
-    return new ApiModels.PlanningMap(tileSize, originX, originZ, columns, rows, true, blocked, stations, routeNodes, routeEdges);
+    return new ApiModels.PlanningMap(tileSize, originX, originZ, columns, rows, true, blocked, stations, routeNodes, routeEdges, aisles());
   }
 
   private static boolean tileIntersects(double x, double z, double tileSize, PhysicalObstacle obstacle) {

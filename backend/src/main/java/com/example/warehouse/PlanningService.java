@@ -45,7 +45,13 @@ class PlanningWorker {
     try {
       List<ApiModels.IncomingLoad> loads = store.incomingLoads(request.inboundLoadIds());
       if (loads.size() != request.inboundLoadIds().size()) throw new IllegalArgumentException("Every requested load must exist in inbound inventory");
-      List<ApiModels.CandidateSlot> candidates = store.candidates();
+      // The operator may name an aisle. Enforce it by narrowing the candidate list
+      // rather than by trusting the advisor: with AI_PROVIDER=mock the prompt is
+      // never read at all, and even under OpenRouter a constraint we can check is
+      // better applied than requested. validate() below then rejects any slot
+      // outside this list, so the restriction holds whatever the advisor returns.
+      List<ApiModels.CandidateSlot> candidates =
+          AisleDirective.restrict(store.candidates(), request.operatorPrompt(), store.aisles());
       ApiModels.PlacementPlan plan = advisor.propose(loads, candidates, store.planningMap(), request.operatorPrompt());
       validate(loads, candidates, plan);
       transaction.create(requestId, loads, plan);

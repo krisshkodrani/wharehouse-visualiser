@@ -71,7 +71,10 @@ class PlacementAdvisor {
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("model", model);
     body.put("messages", List.of(
-        Map.of("role", "system", "content", "Choose exactly one unique eligible slot for each load. Return only a JSON object with a placements array; each placement must contain loadId, slotId, and reason strings. Do not use Markdown."),
+        Map.of("role", "system", "content", "Choose exactly one unique eligible slot for each load. "
+            + "Each eligible slot names the aisle that serves it, and warehouseMap.aisles lists them; when the operator "
+            + "names an aisle the eligible slots have already been narrowed to it, so choose only from what you are given. "
+            + "Return only a JSON object with a placements array; each placement must contain loadId, slotId, and reason strings. Do not use Markdown."),
         Map.of("role", "user", "content", snapshot)));
     body.put("response_format", Map.of("type", "json_schema", "json_schema", Map.of("name", "warehouse_placement", "strict", true, "schema", schema)));
     Map<String, Object> providerRouting = new LinkedHashMap<>();
