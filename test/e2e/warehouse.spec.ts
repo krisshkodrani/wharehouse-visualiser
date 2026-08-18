@@ -45,6 +45,8 @@ test("renders the seeded VDA 5050 control tower and unified order workflow", asy
     await page.goto("/index.html?e2e=1", { waitUntil: "domcontentloaded", timeout: 120_000 });
     await expect(page.locator("#startup-status")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Warehouse Control Tower", exact: true })).toBeVisible();
+    // Story view is the default, so the dense control tower this test covers is one click away.
+    await page.getByRole("button", { name: "Engineer view" }).click();
     await expect(page.getByText("Transport orders", { exact: true })).toBeVisible();
     await expect(page.getByText("TO-AAAAAAAA", { exact: true }).first()).toBeVisible();
     await expect(page.locator("canvas.warehouseCanvas")).toBeVisible();
