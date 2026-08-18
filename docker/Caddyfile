@@ -1,0 +1,24 @@
+# TLS terminator for the Lightsail deployment.
+#
+# Caddy does one job here: obtain and renew the certificate, redirect HTTP to HTTPS,
+# and hand everything to the frontend container. Routing, static assets, and rate
+# limiting stay in nginx (docker/nginx.prod.conf) so that logic lives in one place.
+#
+# `.dev` is on the HSTS preload list, so HTTPS is mandatory rather than optional —
+# browsers refuse a plain HTTP connection to this name outright.
+#
+# The A record for this name must already resolve to the instance before Caddy first
+# starts, or the ACME HTTP-01 challenge fails.
+
+whv.aipoweredapps.dev {
+	encode zstd gzip
+
+	# WebSocket upgrades for /ws pass through untouched: Caddy forwards Connection
+	# and Upgrade headers by default, so no extra configuration is needed.
+	reverse_proxy frontend:80
+
+	log {
+		output stderr
+		format console
+	}
+}
