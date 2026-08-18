@@ -84,12 +84,6 @@ class WarehouseController {
   @PostMapping("/warehouses/linz/transport-orders/{id}/cancel")
   ApiModels.TransportOrderView cancelTransportOrder(@PathVariable("id") UUID id) { return operations.cancel(id); }
 
-  @PostMapping("/demo/events")
-  ResponseEntity<Void> demoEvent(@Valid @RequestBody ApiModels.DemoEventRequest request) {
-    operations.demoEvent(request);
-    return ResponseEntity.accepted().build();
-  }
-
   @PostMapping("/warehouses/linz/operations/pause")
   ApiModels.RuntimeView pause() { return operations.pause(); }
 
