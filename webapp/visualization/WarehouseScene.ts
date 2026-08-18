@@ -70,6 +70,17 @@ const APRON_DEPTH = 14;
 const APRON_CENTRE_Z = 13.5;
 // Aisle lettering. Inset from each end so the text sits inside the lane rather than
 // under the cross-aisle it joins.
+// How long a cargo visual waits, still on screen, between losing one owner and
+// being claimed by the next. Handovers are driven by two independent streams --
+// the snapshot decides what belongs on a shelf, telemetry decides what the fork
+// holds -- and either can arrive first, so the box is parked rather than
+// destroyed until one of them claims it.
+const CARGO_HANDOVER_GRACE_MS = 30000;
+// Statuses whose visual belongs to something other than a shelf, staging or the
+// fork, so a pallet parked mid-handover in one of these is genuinely gone rather
+// than in limbo.
+const CARGO_STATUSES_ELSEWHERE = new Set(["SHIPPED", "ON_CONVEYOR"]);
+const CARGO_PLACEMENT_FRAMES = 21;
 const AISLE_LABEL_INSET = 3.2;
 const AISLE_LABEL_WIDTH = 6.4;
 const AISLE_LABEL_HEIGHT = 1.6;
@@ -139,6 +150,11 @@ export default class WarehouseScene {
   private readonly rackColliders: RackCollider[] = [];
   private readonly cargoItems: CargoItem[] = [];
   private readonly inboundCargoItems: CargoItem[] = [];
+  /** Cargo mid-handover: detached from its previous owner, still on screen, waiting
+   * to be claimed. Keyed by load id. */
+  private readonly pendingCargo = new Map<string, { item: CargoItem; orphanedAt: number }>();
+  private cargoCardboardMaterial?: StandardMaterialType;
+  private cargoPalletMaterial?: StandardMaterialType;
   private readonly conveyorCargoItems: CargoItem[] = [];
   private robotCellRoot?: TransformNodeType;
   private robotCellStation?: StationDefinition;
@@ -248,6 +264,9 @@ export default class WarehouseScene {
     this.syncInboundCargo(config.inboundLoads ?? this.placeholderLoads(config.inboundCount ?? 0));
     this.syncConveyorCargo(config.conveyorLoads ?? [], config.conveyorTransfers ?? []);
     this.syncRobotCell(config.robotCells ?? [], config.conveyorTransfers ?? []);
+    // Last, so a pallet the syncs above have just claimed is no longer pending and
+    // cannot be retired by the same pass that placed it.
+    this.reconcilePendingCargo(config.loadDetails ?? []);
     this.updateChargingIndicators(config.chargingStationId);
   }
 
@@ -485,6 +504,7 @@ export default class WarehouseScene {
 
   private readonly updateFrame = (): void => {
     this.updateCameraPan();
+    this.sweepPendingCargo();
     if (!this.forklift || this.poseBuffer.length === 0) return;
     const renderAt = performance.now() - 150;
     while (this.poseBuffer.length > 2 && this.poseBuffer[1].receivedAt <= renderAt) this.poseBuffer.shift();
@@ -670,20 +690,28 @@ export default class WarehouseScene {
     const root = new TransformNode(`liveCarriedCargo-${loadId}`, this.scene);
     root.parent = this.forkliftForkAssembly;
     root.position.set(0, 0.43, -1.72);
-    const palletMaterial = this.createWoodMaterial("liveCargoPalletWood");
-    const cardboardMaterial = this.createCardboardMaterial("liveCargoCardboard");
-    for (const z of [-0.24, 0, 0.24]) {
+    // Built once and reused. These were rebuilt on every pickup, and each one
+    // rasterises a 512x512 canvas texture, so the hitch landed precisely on the
+    // frame the box changed hands.
+    this.cargoPalletMaterial ??= this.createWoodMaterial("liveCargoPalletWood");
+    this.cargoCardboardMaterial ??= this.createCardboardMaterial("liveCargoCardboard");
+    const palletMaterial = this.cargoPalletMaterial;
+    const cardboardMaterial = this.cargoCardboardMaterial;
+    const slats = [-0.24, 0, 0.24].map((z) => {
       const slat = MeshBuilder.CreateBox("liveCargoPalletSlat", { width: 0.82, height: 0.075, depth: 0.13 }, this.scene);
       slat.position.set(0, 0.03, z); slat.material = palletMaterial; slat.parent = root;
-    }
-    for (const x of [-0.31, 0, 0.31]) {
+      return slat;
+    });
+    const blocks = [-0.31, 0, 0.31].map((x) => {
       const block = MeshBuilder.CreateBox("liveCargoPalletBlock", { width: 0.14, height: 0.12, depth: 0.48 }, this.scene);
       block.position.set(x, -0.055, 0); block.material = palletMaterial; block.parent = root;
-    }
+      return block;
+    });
     const box = MeshBuilder.CreateBox("liveCarriedBox", { width: 0.72, height: 0.56, depth: 0.56 }, this.scene);
     box.position.y = 0.34; box.material = cardboardMaterial; box.parent = root;
-    this.registerLoadHover(box, loadId);
-    const item = { id: loadId, root, carried: true };
+    const parts = [...slats, ...blocks, box];
+    for (const mesh of parts) this.registerLoadHover(mesh, loadId);
+    const item = { id: loadId, root, carried: true, meshes: parts };
     this.carriedCargo = item;
     this.telemetry("CARGO_ATTACHED", {
       loadId, x: Number((this.forklift?.position.x ?? 0).toFixed(2)), z: Number((this.forklift?.position.z ?? 0).toFixed(2))
@@ -693,13 +721,17 @@ export default class WarehouseScene {
   private syncCarriedCargo(loadId?: string): void {
     if (loadId && this.carriedCargo?.id === loadId) return;
     if (this.carriedCargo) {
-      const previousId = this.carriedCargo.id;
-      this.carriedCargo.root.dispose(false, true);
+      const previous = this.carriedCargo;
       this.carriedCargo = undefined;
-      this.telemetry("CARGO_DETACHED", { loadId: previousId });
+      // Parked, not destroyed: the shelf will not list this load until the next
+      // snapshot reports it stored, and disposing here is what made a dropped
+      // pallet arrive late -- or never, when the status lagged the physical drop.
+      this.releaseCargo(previous, "RELEASED_BY_FORK");
+      this.telemetry("CARGO_DETACHED", { loadId: previous.id });
     }
     if (!loadId || !this.forkliftForkAssembly) return;
-    const existing = [...this.inboundCargoItems, ...this.cargoItems].find((item) => item.id === loadId);
+    const existing = this.claimPendingCargo(loadId)
+      ?? [...this.inboundCargoItems, ...this.cargoItems].find((item) => item.id === loadId);
     if (!existing) {
       this.createLiveCarriedCargo(loadId);
       return;
@@ -944,12 +976,19 @@ export default class WarehouseScene {
     const desiredIds = new Set(desired.map((load) => load.id));
     const previousIds = this.inboundCargoItems.map((item) => item.id);
     for (const item of [...this.inboundCargoItems]) {
-      if (desiredIds.has(item.id)) continue;
+      if (desiredIds.has(item.id) || item.carried) continue;
       this.inboundCargoItems.splice(this.inboundCargoItems.indexOf(item), 1);
-      this.animateCargoExit(item, new Vector3(0.18, 0.18, 0.18));
+      // Staging to fork is the commonest move in the demo and was the ugliest: this
+      // list is rebuilt from the snapshot, which regularly drops the load before
+      // telemetry announces the fork has it.
+      this.releaseCargo(item, "LEFT_STAGING");
     }
     desired.forEach((load, index) => {
-      if (!this.inboundCargoItems.some((item) => item.id === load.id)) this.addInboundCargo(load, index, true);
+      if (this.inboundCargoItems.some((item) => item.id === load.id)) return;
+      const handedOver = this.pendingCargo.has(load.id);
+      this.addInboundCargo(load, index, !handedOver);
+      const created = this.inboundCargoItems.find((item) => item.id === load.id);
+      if (handedOver && created) this.adoptPendingCargo(load.id, created);
     });
     desired.forEach((load, index) => {
       const item = this.inboundCargoItems.find((candidate) => candidate.id === load.id);
@@ -1488,13 +1527,133 @@ export default class WarehouseScene {
     for (const rack of racks) {
       const parts = this.rackParts.get(rack.id);
       if (!parts) continue;
-      for (const [id, target] of desired) if (target.rack.id === rack.id && !this.cargoItems.some((item) => item.id === id))
-        this.createCargo(rack, parts.width, target.bay, target.level, parts.cardboardMaterial, parts.palletMaterial, parts.meshes, true, id);
+      for (const [id, target] of desired) {
+        if (target.rack.id !== rack.id || this.cargoItems.some((item) => item.id === id)) continue;
+        // A load arriving on a shelf it was just carried to already has a visual in
+        // flight; glide that one into the slot instead of popping a second one in.
+        const handedOver = this.pendingCargo.has(id);
+        const created = this.createCargo(rack, parts.width, target.bay, target.level,
+          parts.cardboardMaterial, parts.palletMaterial, parts.meshes, !handedOver, id);
+        if (handedOver) this.adoptPendingCargo(id, created);
+      }
     }
     for (const item of [...this.cargoItems]) {
       if (desired.has(item.id) || item.carried) continue;
       this.cargoItems.splice(this.cargoItems.indexOf(item), 1);
-      this.animateCargoExit(item, new Vector3(0.12, 0.12, 0.12));
+      // The fork may be about to claim this: telemetry saying so can arrive after
+      // the snapshot that removed it from the shelf.
+      this.releaseCargo(item, "LEFT_RACK");
+    }
+  }
+
+  /** Parks a cargo visual between owners instead of destroying it.
+   *
+   * <p>Every handover used to be a dispose followed by a create, and the two update
+   * streams that drive it do not coordinate: the snapshot removes a load from a
+   * shelf when its status changes, telemetry adds it to the fork when the vehicle
+   * reports it. Whichever lost the race left a gap with no box anywhere -- visible
+   * as a shelf box shrinking away and a new one popping onto the fork, or as a
+   * pallet arriving late (or never) after a drop. Parking it keeps one continuous
+   * object across the handover no matter which stream arrives first.
+   *
+   * <p>setParent, not .parent: it preserves the world transform, so the box stays
+   * exactly where the viewer last saw it rather than jumping to the origin. */
+  private releaseCargo(item: CargoItem, reason: string): void {
+    item.carried = false;
+    item.root.setParent(this.warehouseRoot ?? null);
+    this.pendingCargo.set(item.id, { item, orphanedAt: performance.now() });
+    this.telemetry("CARGO_ORPHANED", { loadId: item.id, reason });
+  }
+
+  /** Takes a parked visual, if one is waiting for this load. */
+  private claimPendingCargo(loadId: string): CargoItem | undefined {
+    const pending = this.pendingCargo.get(loadId);
+    if (!pending) return undefined;
+    this.pendingCargo.delete(loadId);
+    return pending.item;
+  }
+
+  /** Hands a parked visual over to a newly built one standing in the same place.
+   *
+   * <p>Staging pallets and shelf pallets are modelled differently (a flat base with
+   * a label versus slats, blocks and a crate), so a staging visual cannot simply be
+   * adopted onto a shelf -- the wrong shape would stay there. The replacement is
+   * created at the parked visual's exact pose and the parked one disposed in the
+   * same frame, which is invisible, and then it glides to its slot. */
+  private adoptPendingCargo(loadId: string, replacement: CargoItem): boolean {
+    const parked = this.claimPendingCargo(loadId);
+    if (!parked) return false;
+    const target = replacement.root.position.clone();
+    const targetRotationY = replacement.root.rotation.y;
+    // Both are read in warehouseRoot space: releaseCargo reparents the parked visual
+    // there, so its local position is directly comparable to the replacement's.
+    // Mixing an absolute position with a local one puts the box in the wrong place
+    // the moment the root is ever transformed.
+    const from = parked.root.position.clone();
+    parked.root.dispose(false, true);
+    replacement.root.position.copyFrom(from);
+    replacement.root.scaling.set(1, 1, 1);
+    this.animateCargoPlacement(replacement, target, targetRotationY);
+    this.telemetry("CARGO_ADOPTED", { loadId });
+    return true;
+  }
+
+  /** Glides a box from wherever it was handed over into its slot, so the vehicle is
+   * seen to place it rather than the box blinking into position. */
+  private animateCargoPlacement(item: CargoItem, target: Vector3Type, targetRotationY: number): void {
+    const easing = new CubicEase();
+    easing.setEasingMode(EasingFunction.EASINGMODE_EASEOUT);
+    const move = new Animation(`cargoPlace-${item.id}`, "position", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
+    move.setKeys([{ frame: 0, value: item.root.position.clone() }, { frame: CARGO_PLACEMENT_FRAMES, value: target.clone() }]);
+    move.setEasingFunction(easing);
+    // A shallow squash on arrival reads as weight settling onto the shelf.
+    const settle = new Animation(`cargoSettle-${item.id}`, "scaling", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
+    settle.setKeys([
+      { frame: 0, value: new Vector3(1, 1, 1) },
+      { frame: CARGO_PLACEMENT_FRAMES, value: new Vector3(1.04, 0.94, 1.04) },
+      { frame: CARGO_PLACEMENT_FRAMES + 7, value: new Vector3(1, 1, 1) }
+    ]);
+    settle.setEasingFunction(easing);
+    item.root.rotation.y = targetRotationY;
+    this.scene.beginDirectAnimation(item.root, [move, settle], 0, CARGO_PLACEMENT_FRAMES + 7, false);
+  }
+
+  /** Retires anything nobody claimed, as a long-stop only.
+   *
+   * <p>The real decision is made by reconcilePendingCargo against the load list. A
+   * timer alone could not do this job: the interval between the fork releasing a
+   * pallet and the backend reporting it stored is not bounded by anything the
+   * browser knows, and measuring it produced values from a few seconds to never.
+   * Any constant short enough to clear ghosts promptly was also short enough to
+   * delete a pallet that was still on its way to a shelf -- which is the original
+   * bug. So this only catches leaks. */
+  private sweepPendingCargo(): void {
+    if (this.pendingCargo.size === 0) return;
+    const now = performance.now();
+    for (const [loadId, pending] of [...this.pendingCargo]) {
+      if (now - pending.orphanedAt < CARGO_HANDOVER_GRACE_MS) continue;
+      this.pendingCargo.delete(loadId);
+      this.telemetry("CARGO_EXPIRED", { loadId });
+      this.animateCargoExit(pending.item, new Vector3(0.12, 0.12, 0.12));
+    }
+  }
+
+  /** Decides the fate of parked cargo from the load list rather than from a clock.
+   *
+   * <p>A pallet is kept while the data still says it is somewhere the scene draws --
+   * staging, a shelf, or in transit between them -- because one of the sync paths
+   * will claim it as soon as its status catches up. It is retired only on evidence:
+   * the load has left the warehouse, or its visual now belongs to the conveyor. */
+  private reconcilePendingCargo(loads: LoadVisualDefinition[]): void {
+    if (this.pendingCargo.size === 0) return;
+    const byId = new Map(loads.map((load) => [load.id, load]));
+    for (const [loadId, pending] of [...this.pendingCargo]) {
+      const load = byId.get(loadId);
+      const gone = loads.length > 0 && (!load || CARGO_STATUSES_ELSEWHERE.has(load.status ?? ""));
+      if (!gone) continue;
+      this.pendingCargo.delete(loadId);
+      this.telemetry("CARGO_EXPIRED", { loadId, reason: load ? load.status : "NOT_IN_INVENTORY" });
+      this.animateCargoExit(pending.item, new Vector3(0.12, 0.12, 0.12));
     }
   }
 
@@ -1701,6 +1860,11 @@ export default class WarehouseScene {
     this.rackColliders.length = 0;
     this.cargoItems.length = 0;
     this.inboundCargoItems.length = 0;
+    // The warehouse root is disposed with the scene, so the parked visuals go with
+    // it; clearing the map stops a stale entry being claimed after a rebuild.
+    this.pendingCargo.clear();
+    this.cargoCardboardMaterial = undefined;
+    this.cargoPalletMaterial = undefined;
     this.conveyorCargoItems.length = 0;
     this.poseBuffer.length = 0;
     this.wheelMeshes.length = 0;
