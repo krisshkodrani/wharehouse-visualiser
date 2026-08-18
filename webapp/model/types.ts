@@ -3,6 +3,18 @@ export interface InventoryItem {
   quantity: number;
 }
 
+/** A named travel aisle serving one rack row. Comes straight from the aisle table,
+ * so the label the operator reads on the floor is the identifier they can name in a
+ * putaway request. */
+export interface AisleDefinition {
+  id: string;
+  name: string;
+  position: [number, number, number];
+  rotationY?: number;
+  length: number;
+  width: number;
+}
+
 export interface RackDefinition {
   id: string;
   canonicalId?: string;
@@ -47,6 +59,7 @@ export interface WarehouseVisualConfig {
   floorColor: string;
   accentColor: string;
   racks: RackDefinition[];
+  aisles?: AisleDefinition[];
   forkliftStops: [[number, number, number], [number, number, number]];
   stations?: StationDefinition[];
   cartons?: CartonVisualDefinition[];
@@ -91,8 +104,10 @@ export interface ApiScenario { id?: string; name?: string; configured: boolean; 
 export interface ScenarioPreset { id: string; name: string; description: string; storedLoads: number; inboundLoads: number; orderType: string; orderLoads: number; priority: string; agvBattery: number; }
 export interface ApiRuntime { operationState: "RUNNING" | "PAUSED"; simulationEpoch: number; timeScale: 1 | 2 | 4; scenarioId?: string; scenarioConfigured: boolean; changedAt: string; }
 export interface ApiConveyorTransfer { id: string; loadId?: string; cartonId?: string; conveyorId?: string; status: string; enteredAt: string; exitDueAt: string; completedAt?: string; }
+export interface ApiAisle { id: string; name: string; x: number; z: number; rotationY: number; length: number; width: number; }
 export interface WarehouseSnapshot {
   id: string; name: string; width: number; depth: number; racks: ApiRack[]; locations: ApiLocation[]; loads: ApiLoad[]; agvs: ApiAgv[]; jobs: ApiJob[]; transportOrders: ApiTransportOrder[]; tasks: ApiTransportTask[]; scenario: ApiScenario;
   runtime: ApiRuntime; conveyorTransfers: ApiConveyorTransfer[]; obstacles?: ApiObstacle[]; cartons?: ApiCarton[]; robotCells?: ApiRobotCell[];
+  aisles?: ApiAisle[];
 }
 export interface WarehouseEvent { eventId: string; type: string; eventType?: string; occurredAt: string; warehouseId: string; simulationEpoch: number; entityId?: string; correlationId?: string; payloadVersion?: string; payload: unknown; }

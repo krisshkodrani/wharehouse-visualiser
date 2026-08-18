@@ -383,6 +383,10 @@ export default class MainController extends Controller {
         signText: "LINZ AI LOGISTICS",
         floorColor: "#dce8e5",
         accentColor: "#0a6ed1",
+        aisles: (snapshot.aisles ?? []).map((aisle) => ({
+          id: aisle.id, name: aisle.name, position: [aisle.x, 0, aisle.z] as [number, number, number],
+          rotationY: aisle.rotationY, length: aisle.length, width: aisle.width
+        })),
         racks: snapshot.racks.map((rack) => {
           const slots = snapshot.locations.filter((location) => location.rackId === rack.id);
           const slotById = new Map(slots.map((slot) => [slot.id, slot]));

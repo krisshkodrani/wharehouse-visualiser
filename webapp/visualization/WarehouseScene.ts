@@ -6,7 +6,7 @@ import type { Vector3 as Vector3Type } from "@babylonjs/core/Maths/math.vector";
 import type { Mesh } from "@babylonjs/core/Meshes/mesh";
 import type { TransformNode as TransformNodeType } from "@babylonjs/core/Meshes/transformNode";
 import type { Scene as SceneType } from "@babylonjs/core/scene";
-import type { ApiAgv, ConveyorVisualDefinition, LoadVisualDefinition, ObstacleDefinition, RackDefinition, RobotCellVisualDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
+import type { AisleDefinition, ApiAgv, ConveyorVisualDefinition, LoadVisualDefinition, ObstacleDefinition, RackDefinition, RobotCellVisualDefinition, StationDefinition, WarehouseVisualConfig } from "../model/types";
 import { maximumReach, requiredReach, solveArmPose } from "./armKinematics";
 import type { ArmGeometry, ArmPose } from "./armKinematics";
 
@@ -57,6 +57,26 @@ interface CargoItem {
 interface PoseSample { receivedAt: number; x: number; z: number; theta: number; velocity: number; }
 
 // Double both dimensions to provide four times the original floor area.
+// West-wall conveyor penetration (V23). The opening spans both lane envelopes
+// (z 12.7..14.1 and 14.7..16.1) with ~0.3 m of reveal each side; WALL-W stops at
+// SHIPPING_OPENING_MIN_Z and the WALL-W-OUT-N return starts at SHIPPING_OPENING_MAX_Z.
+const SHIPPING_WALL_X = -23.45;
+const SHIPPING_OPENING_MIN_Z = 12.4;
+const SHIPPING_OPENING_MAX_Z = 16.4;
+const WALL_HEIGHT = 1.1;
+// Exterior slab carrying the belt overhang and the relocated trailer bay.
+const APRON_WIDTH = 8;
+const APRON_DEPTH = 14;
+const APRON_CENTRE_Z = 13.5;
+// Aisle lettering. Inset from each end so the text sits inside the lane rather than
+// under the cross-aisle it joins.
+const AISLE_LABEL_INSET = 3.2;
+const AISLE_LABEL_WIDTH = 6.4;
+const AISLE_LABEL_HEIGHT = 1.6;
+// Dark on a light floor. The first attempt used the mint accent the conveyor labels
+// use, which is legible on a dark deck and all but invisible on #dce8e5 concrete --
+// the text rendered correctly and simply could not be read.
+const AISLE_LABEL_COLOR = "#123f33";
 const FLOOR_HALF_WIDTH = 24;
 const FLOOR_HALF_DEPTH = 18;
 /** Collision radius used to detect the live vehicle overlapping rack geometry. */
@@ -186,6 +206,7 @@ export default class WarehouseScene {
     floor.material = floorMaterial;
     floor.parent = this.warehouseRoot;
     floor.receiveShadows = true;
+    this.createShippingApron(floorMaterial);
     const inboundStation = config.stations?.find((station) => station.canonicalId === "REC-STG-01" || station.type === "RECEIVING_STAGING" || station.type === "INBOUND") ?? {
       id: "INBOUND-01", type: "INBOUND", position: config.forkliftStops[0], rotationY: 0, width: 7, depth: 7
     } as StationDefinition;
@@ -204,6 +225,7 @@ export default class WarehouseScene {
     this.createOutboundConveyors(config.stations?.filter((station) => station.type === "CONVEYOR") ?? [], config.conveyorLoads ?? [], config.conveyorTransfers ?? []);
     const robotStation = config.stations?.find((station) => station.type === "ROBOT_CELL");
     if (robotStation) this.createRobotCell(robotStation, config.robotCells ?? [], config.conveyorTransfers ?? []);
+    this.createAisleMarkings(config.aisles ?? []);
     this.createAuxiliaryStations(config.stations ?? []);
     this.forkliftStops = [Vector3.FromArray(config.forkliftStops[0]), Vector3.FromArray(config.forkliftStops[1])];
     this.createForklift(previousForkliftPosition ?? this.forkliftStops[0], config.accentColor);
@@ -1030,10 +1052,12 @@ export default class WarehouseScene {
    * areas were able to overlap unnoticed. */
   private createAuxiliaryStations(stations: StationDefinition[]): void {
     const zones: Array<[string, string, string]> = [
+      // Quality control and maintenance are modelled as locations but nothing routes
+      // to them and nothing reads them, so their outlines and floor text were two
+      // unexplained rectangles in open floor. The rows stay in the database; they
+      // just no longer claim space on the operator's picture.
       ["OUTBOUND_DOCK", "SHIPPING DOCK", "#8fd0ff"],
-      ["RECEIVING_DOCK", "RECEIVING DOCK", "#8fd0ff"],
-      ["QUALITY_CONTROL", "QUALITY", "#c7a6ff"],
-      ["MAINTENANCE", "MAINTENANCE", "#ffb38f"]
+      ["RECEIVING_DOCK", "RECEIVING DOCK", "#8fd0ff"]
     ];
     for (const [type, label, color] of zones) {
       for (const station of stations.filter((candidate) => candidate.type === type)) {
@@ -1060,23 +1084,59 @@ export default class WarehouseScene {
     }
   }
 
-  /** The outbound dock backs onto the west wall, too close for the drive-in dock
-   * hardware to fit, so it gets wall-mounted shutters at the conveyor discharge
-   * height instead. */
+  /** Frames the conveyor penetration in the west wall (V23).
+   *
+   * <p>This used to draw two solid shutters keyed to the dock centre +/- 1.5 m, so
+   * one landed on a lane and the other on blank wall, and both sealed an opening
+   * that did not exist -- the belts simply stopped at the wall. The opening is a
+   * property of the wall, not of the dock, so it is drawn from the same constants
+   * the migration used rather than from a station that has since moved outside. */
   private createShippingDoors(station: StationDefinition): void {
     const steel = this.createMetalMaterial(`shippingDoorSteel-${station.id}`, "#59636c", 64);
     const safety = this.createMaterial(`shippingDoorSafety-${station.id}`, "#e87518");
-    const wallX = -23.3;
-    for (const z of [station.position[2] - 1.5, station.position[2] + 1.5]) {
-      const shutter = MeshBuilder.CreateBox(`shippingShutter-${station.id}`, { width: 0.16, height: 3.05, depth: 2.4 }, this.scene);
-      shutter.position.set(wallX, 1.53, z);
-      shutter.material = steel;
-      shutter.parent = this.warehouseRoot ?? null;
-      const sill = MeshBuilder.CreateBox(`shippingSill-${station.id}`, { width: 0.5, height: 0.1, depth: 2.4 }, this.scene);
-      sill.position.set(wallX + 0.32, 0.05, z);
-      sill.material = safety;
-      sill.parent = this.warehouseRoot ?? null;
+
+    // Jambs close the reveal either side of the opening, so the wall reads as cut
+    // rather than as merely absent between two segments.
+    for (const z of [SHIPPING_OPENING_MIN_Z, SHIPPING_OPENING_MAX_Z]) {
+      const jamb = MeshBuilder.CreateBox(`shippingJamb-${station.id}`, { width: 0.34, height: WALL_HEIGHT, depth: 0.22 }, this.scene);
+      jamb.position.set(SHIPPING_WALL_X, WALL_HEIGHT / 2, z);
+      jamb.material = steel;
+      jamb.parent = this.warehouseRoot ?? null;
     }
+
+    // Header spanning the opening, with the roller drum a shutter would wind onto.
+    const openingWidth = SHIPPING_OPENING_MAX_Z - SHIPPING_OPENING_MIN_Z;
+    const openingCentreZ = (SHIPPING_OPENING_MIN_Z + SHIPPING_OPENING_MAX_Z) / 2;
+    const header = MeshBuilder.CreateBox(`shippingHeader-${station.id}`, { width: 0.3, height: 0.34, depth: openingWidth }, this.scene);
+    header.position.set(SHIPPING_WALL_X, WALL_HEIGHT + 0.17, openingCentreZ);
+    header.material = steel;
+    header.parent = this.warehouseRoot ?? null;
+
+    const drum = MeshBuilder.CreateCylinder(`shippingDoorDrum-${station.id}`, { diameter: 0.3, height: openingWidth - 0.5, tessellation: 16 }, this.scene);
+    drum.rotation.x = Math.PI / 2;
+    drum.position.set(SHIPPING_WALL_X + 0.3, WALL_HEIGHT + 0.16, openingCentreZ);
+    drum.material = steel;
+    drum.parent = this.warehouseRoot ?? null;
+
+    // Hazard kerbs along the reveal, at the belt edges rather than the dock centre.
+    for (const z of [SHIPPING_OPENING_MIN_Z + 0.22, SHIPPING_OPENING_MAX_Z - 0.22]) {
+      const kerb = MeshBuilder.CreateBox(`shippingKerb-${station.id}`, { width: 0.62, height: 0.1, depth: 0.16 }, this.scene);
+      kerb.position.set(SHIPPING_WALL_X, 0.05, z);
+      kerb.material = safety;
+      kerb.parent = this.warehouseRoot ?? null;
+    }
+  }
+
+  /** Ground for everything the conveyors now reach. The floor ground is exactly the
+   * 48 x 36 building, so once the belts ran through the wall their overhang and the
+   * relocated trailer bay hung over empty space. */
+  private createShippingApron(floorMaterial: StandardMaterialType): void {
+    const apron = MeshBuilder.CreateGround("shippingApron",
+      { width: APRON_WIDTH, height: APRON_DEPTH }, this.scene);
+    apron.position.set(-FLOOR_HALF_WIDTH - APRON_WIDTH / 2 + 0.05, 0.001, APRON_CENTRE_Z);
+    apron.material = floorMaterial;
+    apron.receiveShadows = true;
+    apron.parent = this.warehouseRoot ?? null;
   }
 
   /** Builds the arm as a genuine pin-joint chain.
@@ -1308,15 +1368,49 @@ export default class WarehouseScene {
   }
 
   private createFloorLabel(station: StationDefinition, text: string, localX: number, localZ: number, width: number, height: number, color: string): void {
+    const point = this.stationPoint(station, localX, localZ);
+    this.drawFloorText(text, point.x, point.z, station.rotationY, width, height, color);
+  }
+
+  /** World-space floor text. Split out of createFloorLabel because aisles are not
+   * stations and have no local frame to project through, but should be lettered in
+   * exactly the same hand as everything else painted on the floor. */
+  private drawFloorText(text: string, worldX: number, worldZ: number, rotationY: number,
+    width: number, height: number, color: string): void {
     const texture = new DynamicTexture(`floorLabel-${text}`, { width: 512, height: 128 }, this.scene, true);
     texture.hasAlpha = true;
     texture.drawText(text, null, 84, "bold 42px Arial", color, "transparent", true, true);
     const material = new StandardMaterial(`floorLabelMaterial-${text}`, this.scene);
     material.diffuseTexture = texture; material.emissiveColor = new Color3(.14, .14, .14); material.useAlphaFromDiffuseTexture = true;
     const label = MeshBuilder.CreatePlane(`floorLabel-${text}`, { width, height }, this.scene);
-    const point = this.stationPoint(station, localX, localZ);
-    label.position.set(point.x, .027, point.z); label.rotation.x = Math.PI / 2; label.rotation.y = station.rotationY + Math.PI;
+    // rotation.x lays the plane flat with its textured face downwards, so the camera
+    // reads it from behind: the extra PI that used to be added here spun the label
+    // to compensate, which left every floor label in the warehouse -- "RECEIVING"
+    // included -- readable only in a mirror. The plane is symmetric about its own
+    // centre, so dropping it is the whole fix.
+    label.position.set(worldX, .027, worldZ); label.rotation.x = Math.PI / 2; label.rotation.y = rotationY;
     label.material = material; label.parent = this.warehouseRoot ?? null;
+  }
+
+  /** Letters each travel aisle at both ends.
+   *
+   * <p>The aisles have always existed in the data -- three rack rows, a lane of
+   * route nodes each -- but carried no name anywhere the operator could see, so
+   * "put it in aisle B" had nothing on screen to refer to. Both ends are marked
+   * because the vehicle enters from either the west cross-aisle or the east one. */
+  private createAisleMarkings(aisles: AisleDefinition[]): void {
+    for (const aisle of aisles) {
+      const [x, , z] = aisle.position;
+      const rotationY = aisle.rotationY ?? 0;
+      const inset = aisle.length / 2 - AISLE_LABEL_INSET;
+      for (const offset of [-inset, inset]) {
+        const worldX = x + Math.cos(rotationY) * offset;
+        const worldZ = z - Math.sin(rotationY) * offset;
+        this.drawFloorText(aisle.name.toUpperCase(), worldX, worldZ, rotationY,
+          AISLE_LABEL_WIDTH, AISLE_LABEL_HEIGHT, AISLE_LABEL_COLOR);
+      }
+    }
+    if (aisles.length > 0) this.telemetry("AISLES_MARKED", { aisles: aisles.map((aisle) => aisle.id) });
   }
 
   /** Cargo enters at the lane's local -x infeed and travels to its local +x
