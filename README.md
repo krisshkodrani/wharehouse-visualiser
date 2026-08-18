@@ -4,7 +4,7 @@ An OpenUI5 and Babylon.js warehouse control tower backed by Spring Boot, Postgre
 
 > Reference implementation for product and system-design discussion. It is not VDA-certified, a functional-safety component, or a production deployment.
 
-[Architecture at a glance](https://claude.ai/code/artifact/35b1299c-6f7e-4fb1-ae19-92c5c340b504) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Product brief](docs/PRODUCT.md) · [OpenAPI](docs/openapi.yaml) · [MQTT contract](docs/MQTT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
+[Architecture at a glance](https://claude.ai/code/artifact/1a491dad-2323-4427-b87d-d707841c09f6) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Product brief](docs/PRODUCT.md) · [OpenAPI](docs/openapi.yaml) · [MQTT contract](docs/MQTT.md) · [Operations](docs/OPERATIONS.md) · [Threat model](docs/THREAT_MODEL.md) · [Contributing](CONTRIBUTING.md)
 
 ![Story view: the live warehouse with the current order narrated beneath it](artifacts/warehouse-story-view.png)
 
@@ -14,8 +14,6 @@ completed execution. **Engineer view** is one click away in the header and resto
 control tower — transport order rail, execution timeline, VDA 5050 protocol workbench, and
 operational KPIs. The `ⓘ` button explains the six steps between a REST request and a moving
 forklift.
-
-[![Warehouse control tower walkthrough](artifacts/warehouse-control-tower.png)](artifacts/warehouse-control-tower.webm)
 
 ## Run locally with Docker
 
@@ -85,7 +83,7 @@ docker compose up -d --wait postgres mosquitto
 - `vda5050-contracts/`: shared message records and the official VDA 5050 v3.0.0 JSON schemas.
 - `webapp/`: OpenUI5 control-tower UI and Babylon visualization with interpolated live vehicle movement.
 
-REST starts at `/api/v1`, WebSocket/STOMP at `/ws`, and MQTT topics use `vda5050/v3/demo/FL-01/{order,instantActions,state,visualization,connection}`.
+REST starts at `/api/v1` and WebSocket/STOMP at `/ws`. MQTT topics use the prefix `vda5050/v3/demo/FL-01/`. Five are standard VDA 5050 and every one is validated against the pinned v3.0.0 schemas before publication or acceptance — `order` and `instantActions` outbound, `state`, `visualization`, and `connection` inbound. Two more are project extensions carried on the same broker: `control` (simulation epoch, time scale, and reset baseline) and `handling` (fork kinematics).
 
 Transport-order creation accepts an optional `Idempotency-Key`; reuse with the same body returns the existing order and conflicting reuse returns RFC 9457 Problem Details. Operational metrics are available to the internal backend network at `/actuator/prometheus`.
 
