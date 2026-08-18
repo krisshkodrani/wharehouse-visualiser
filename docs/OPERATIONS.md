@@ -56,6 +56,23 @@ Two constraints worth remembering. `POSTGRES_PASSWORD` is read by the image only
 
 A Lightsail snapshot captures `.env`; never share one. To rotate the API key, revoke it at OpenRouter, edit `.env`, and run `up -d`.
 
+### Choosing a model
+
+`OPENROUTER_MODEL` and `OPENROUTER_PROVIDER` are coupled, and getting the pair wrong fails every planning request with a 404 that names no cause:
+
+```
+No endpoints found that can handle the requested parameters
+```
+
+`PlacementAdvisor` sends `temperature: 0` unconditionally and sets `require_parameters: true` only when `OPENROUTER_PROVIDER` is blank. That flag restricts routing to providers supporting every parameter sent. Reasoning models accept no `temperature` — for `openai/gpt-5.6-sol`, neither OpenAI nor Azure lists it — so a blank provider leaves no eligible endpoint. Pinning a provider sets `require_parameters: false`, stops the filtering, and the call succeeds.
+
+- Non-reasoning models (`openai/gpt-4o-mini`): leave the provider blank. Fallbacks stay enabled, which is more robust.
+- Reasoning models (`openai/gpt-5.6-sol`): a provider pin is required, and disables fallbacks as a side effect.
+
+The real fix is to stop sending `temperature` to models that do not accept it, at which point a blank provider would work everywhere. Until then the pairing is load-bearing and should be changed as a pair.
+
+Model choice is also the main cost lever: `gpt-5.6-sol` costs $2.50/$15.00 per million tokens against `gpt-4o-mini` at $0.15/$0.60 — roughly 17× input and 25× output.
+
 ### Cost control
 
 `AI_PROVIDER=openrouter` means real spend, and the endpoint is deliberately unauthenticated. Only two routes reach the model — `POST /api/v1/warehouses/linz/putaway-requests` and `POST /api/v1/warehouses/linz/transport-orders` — and nginx limits each source address to roughly six per minute. Choosing or resetting a scenario calls no model at all, so the headline demo flow is free. The account-level spending cap at OpenRouter is the only control that cannot be bypassed from outside the instance. Setting `AI_PROVIDER=mock` and restarting the backend takes spend to zero without changing anything else.
