@@ -435,6 +435,31 @@ class WarehouseStore {
         + "and updated_at < now() - make_interval(secs => ?)", (rs, n) -> task(rs), graceSeconds);
   }
 
+  /** True while a vehicle is standing in, or reaching into, a guarded cell.
+   *
+   * <p>The AGV has to break the plane of the robot cell's guarding to serve it: the
+   * handoff pad sits at x -3.60, 3.2 m inside a cell that spans x -7.80..-0.40, because
+   * that is the only spot the arm can reach while still reaching the conveyor infeed on
+   * the other side. So OUTBOUND-01's handling pose is at x -1.90 -- 1.5 m inside the cell,
+   * 2.0 m outside the staging area it serves -- and the forks reach a further 1.72 m in.
+   * That is legitimate; what was missing is the interlock every real cell pairs it with.
+   *
+   * <p>The margin covers the vehicle's own envelope, so the arm is held while the forks
+   * are inside even though the vehicle origin is not. */
+  boolean guardedCellOccupied(String cellId) {
+    Integer occupants = jdbc.queryForObject(
+        "select count(*) from agv a, location c where c.id=? and c.operating_width is not null "
+        + "and a.x between c.x - c.operating_width/2 - ? and c.x + c.operating_width/2 + ? "
+        + "and a.z between c.z - c.operating_depth/2 - ? and c.z + c.operating_depth/2 + ?",
+        Integer.class, cellId, VEHICLE_REACH_MARGIN, VEHICLE_REACH_MARGIN,
+        VEHICLE_REACH_MARGIN, VEHICLE_REACH_MARGIN);
+    return occupants != null && occupants > 0;
+  }
+
+  /** How far the forks reach ahead of the vehicle origin, from the carriage offset the
+   * renderer parents carried cargo at. */
+  private static final double VEHICLE_REACH_MARGIN = 1.8;
+
   void completeCancellation(UUID taskId) {
     job(taskId).ifPresent(task -> {
       releaseCancelledTask(task);
