@@ -299,7 +299,16 @@
 
           <VBox visible="{= ${warehouse>/vdaViewMode} === 'RAW' }" height="100%" class="vdaRawPane">
             <MessageStrip text="Exact schema-validated wire payload. This view is read-only." type="Information" showIcon="true" />
-            <code:CodeEditor value="{warehouse>/inspection/selectedDispatch/rawJson}" type="json" editable="false" height="100%" class="vdaCodeEditor" />
+            <!-- growFactor, not height alone. VBox wraps every child in its own flex item, and
+                 that wrapper sized itself to the editor's content rather than the pane: it came
+                 out 2px tall inside a 739px pane, so the payload was present and correct but
+                 rendered zero lines. The wrapper has to be told to grow before height="100%"
+                 on the editor has anything to resolve against. -->
+            <code:CodeEditor value="{warehouse>/inspection/selectedDispatch/rawJson}" type="json" editable="false" height="100%" class="vdaCodeEditor">
+              <code:layoutData>
+                <FlexItemData growFactor="1" baseSize="0%" minHeight="0" />
+              </code:layoutData>
+            </code:CodeEditor>
           </VBox>
         </VBox>
       </HBox>

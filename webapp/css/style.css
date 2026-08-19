@@ -413,7 +413,8 @@ html, body, #content, #container, #container-uiarea, .warehousePage, .warehouseP
 .sequenceDetailCard { white-space: pre-wrap; }
 .vdaRawPane { flex: 1 1 auto; min-height: 0; gap: .55rem; padding: .75rem; }
 .vdaRawPane > .sapMFlexItem:last-child { flex: 1 1 auto; min-height: 20rem; }
-.vdaCodeEditor { height: 100% !important; border: 1px solid var(--sapGroup_ContentBorderColor); border-radius: .45rem; overflow: hidden; }
+.vdaRawPane { min-height: 0; }
+.vdaCodeEditor { height: 100% !important; min-height: 0; border: 1px solid var(--sapGroup_ContentBorderColor); border-radius: .45rem; overflow: hidden; }
 .activityStrip { min-height: 3.1rem; padding: 0 1rem; border-top: 1px solid var(--sapGroup_ContentBorderColor); background: var(--sapGroup_ContentBackground); }
 .activityStrip .sapMText { font-size: .78rem; }
 
