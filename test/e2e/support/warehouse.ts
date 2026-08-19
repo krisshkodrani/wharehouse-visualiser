@@ -49,6 +49,19 @@ async function unsettled(request: APIRequestContext): Promise<string | undefined
  * backend clearing a task and the simulator reporting what it is doing next, which looks
  * idle without being idle.
  */
+export async function waitForQuiet(request: APIRequestContext, timeoutMs = 60_000): Promise<void> {
+  let reason: string | undefined = "not sampled yet";
+  let consecutiveQuiet = 0;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    reason = await unsettled(request);
+    consecutiveQuiet = reason === undefined ? consecutiveQuiet + 1 : 0;
+    if (consecutiveQuiet >= 2) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  expect(consecutiveQuiet, `warehouse never went quiet: ${reason}`).toBeGreaterThanOrEqual(2);
+}
+
 export async function resetToQuiet(request: APIRequestContext, speedMultiplier = 2): Promise<void> {
   await request.post("/api/v1/warehouses/linz/operations/reset", { data: {} });
 
