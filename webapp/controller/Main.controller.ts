@@ -21,6 +21,10 @@ const ATTENTION_STATUSES = ["FAILED", "REJECTED", "CANCELLED"];
 const THROUGHPUT_WINDOW_MS = 60_000;
 /** Remembers the presenter's density choice across the reload that a reset triggers. */
 const VIEW_MODE_KEY = "warehouse.viewMode";
+/** Longest a burst of domain events may defer the snapshot refresh. Without a ceiling the
+ * debounce starves outright: every event reschedules the one and only timer, and nothing
+ * else polls. */
+const REFRESH_DEADLINE_MS = 750;
 
 interface OrderRow { id: string; status: string; createdAt: string; completedAt?: string }
 
@@ -31,6 +35,8 @@ export default class MainController extends Controller {
   private sceneSignature = "";
   private initialized = false;
   private refreshTimer?: number;
+  /** When the currently deferred refresh must run by, regardless of further events. */
+  private refreshDeadline?: number;
   private readonly loadStatuses = new Map<string, string>();
   private readonly jobStatuses = new Map<string, string>();
   private simulationEpoch = 0;
@@ -534,9 +540,26 @@ export default class MainController extends Controller {
       .__warehouseRecordAnimation?.(event, payload);
   }
 
+  /** Debounced snapshot refresh, with a ceiling on how long the debounce may defer it.
+   *
+   * <p>This is the only recurring refresh there is -- nothing polls on a timer -- and every
+   * domain event reschedules it. While events arrive faster than `delay`, the timer was
+   * cleared before it could ever fire, so `loadSnapshot` was never reached and the model
+   * went stale for the whole burst. The busier the warehouse, the less the control tower
+   * updated: an outbound cycle emits robot-cell and conveyor-transfer events continuously,
+   * and a load could go ON_CONVEYOR -> SHIPPED without the operator view observing either.
+   *
+   * <p>The deadline makes starvation impossible: rescheduling still coalesces bursts, but
+   * never past REFRESH_DEADLINE_MS since the first deferred request. */
   private scheduleRefresh(delay: number): void {
+    const now = Date.now();
+    if (this.refreshDeadline === undefined) this.refreshDeadline = now + REFRESH_DEADLINE_MS;
     if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
-    this.refreshTimer = window.setTimeout(() => void this.loadSnapshot(), delay);
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshDeadline = undefined;
+      this.refreshTimer = undefined;
+      void this.loadSnapshot();
+    }, Math.max(0, Math.min(delay, this.refreshDeadline - now)));
   }
 
   private viewport(): WarehouseViewport | undefined { return this.byId("viewport") as WarehouseViewport | undefined; }
