@@ -99,6 +99,21 @@ const APRON_CENTRE_Z = 13.5;
 // the snapshot decides what belongs on a shelf, telemetry decides what the fork
 // holds -- and either can arrive first, so the box is parked rather than
 // destroyed until one of them claims it.
+/** Where a staged inbound pallet sits, in the receiving station's local frame.
+ *
+ * <p>The grid used to start at local x 2.25 and step back 0.88 a row, which put two of its
+ * four rows underneath the vehicle: the AGV serves INBOUND-01 from local x +1.5, and its
+ * envelope is 3.19 m long, reaching from x 0.48 back to x 3.67. Rows at 2.25 and 1.37 sat
+ * squarely inside that, so the forklift drove through the pallets it had come to collect.
+ *
+ * <p>The grid now begins clear of the vehicle's front face and steps back at pallet pitch,
+ * which keeps all four rows inside the 6 m station and holds the same 20-pallet capacity. */
+const INBOUND_ROW_FRONT_X = -.15;
+const INBOUND_ROW_PITCH = .7;
+const INBOUND_COLUMN_FIRST_Z = -2.1;
+const INBOUND_COLUMN_PITCH = .84;
+const INBOUND_COLUMNS = 5;
+
 const CARGO_HANDOVER_GRACE_MS = 30000;
 // Statuses whose visual belongs to something other than a shelf, staging or the
 // fork, so a pallet parked mid-handover in one of these is genuinely gone rather
@@ -1058,9 +1073,19 @@ export default class WarehouseScene {
     loads.slice(0, 20).forEach((load, index) => this.addInboundCargo(load, index, false));
   }
 
+  /** Shared by the initial placement and the reposition pass, so a pallet cannot be built
+   * in one place and then moved to another. */
+  private inboundSlot(index: number): { localX: number; localZ: number } {
+    return {
+      localX: INBOUND_ROW_FRONT_X - Math.floor(index / INBOUND_COLUMNS) * INBOUND_ROW_PITCH,
+      localZ: INBOUND_COLUMN_FIRST_Z + (index % INBOUND_COLUMNS) * INBOUND_COLUMN_PITCH
+    };
+  }
+
   private addInboundCargo(load: LoadVisualDefinition, index: number, animateEntry: boolean): void {
     if (!this.inboundCardboardMaterial || !this.inboundPalletMaterial || !this.inboundStation) return;
-    const point = this.stationPoint(this.inboundStation, 2.25 - Math.floor(index / 5) * 0.88, -2.1 + (index % 5) * 0.84);
+    const slot = this.inboundSlot(index);
+    const point = this.stationPoint(this.inboundStation, slot.localX, slot.localZ);
     const root = new TransformNode(`inboundCargo-${load.id}`, this.scene);
     root.position.set(point.x, 0, point.z);
     root.rotation.y = this.inboundStation.rotationY;
@@ -1102,7 +1127,8 @@ export default class WarehouseScene {
     desired.forEach((load, index) => {
       const item = this.inboundCargoItems.find((candidate) => candidate.id === load.id);
       if (!item || !this.inboundStation) return;
-      const point = this.stationPoint(this.inboundStation, 2.25 - Math.floor(index / 5) * 0.88, -2.1 + (index % 5) * 0.84);
+      const slot = this.inboundSlot(index);
+      const point = this.stationPoint(this.inboundStation, slot.localX, slot.localZ);
       item.root.position.x = point.x; item.root.position.z = point.z;
     });
     const currentIds = this.inboundCargoItems.map((item) => item.id);
@@ -1633,7 +1659,7 @@ export default class WarehouseScene {
       exit.setKeys([{ frame: 0, value: item.root.position.clone() }, { frame: 30, value: new Vector3(end.x, item.root.position.y, end.z) }]);
       const scale = new Animation("conveyorCargoExitScale", "scaling", 60, Animation.ANIMATIONTYPE_VECTOR3, Animation.ANIMATIONLOOPMODE_CONSTANT);
       scale.setKeys([{ frame: 0, value: item.root.scaling.clone() }, { frame: 30, value: new Vector3(0.4, 0.4, 0.4) }]);
-      this.scene.beginDirectAnimation(item.root, [exit, scale], 0, 30, false, 1, () => item.root.dispose(false, true));
+      this.scene.beginDirectAnimation(item.root, [exit, scale], 0, 30, false, 1, () => this.disposeCargoVisual(item));
     }
     desired.forEach((load, index) => {
       if (!this.conveyorCargoItems.some((item) => item.id === load.id))
@@ -1695,6 +1721,26 @@ export default class WarehouseScene {
    *
    * <p>setParent, not .parent: it preserves the world transform, so the box stays
    * exactly where the viewer last saw it rather than jumping to the origin. */
+  /** Retire a cargo visual without taking the shared materials with it.
+   *
+   * <p>These roots used to be disposed with Babylon's disposeMaterialAndTextures flag set.
+   * Cargo materials are deliberately shared -- one cardboard material serves every staged
+   * pallet, because each one rasterises a 512x512 canvas texture -- and Material.dispose()
+   * unbinds itself from every mesh using it. So retiring a single pallet stripped the
+   * material off all the others and they rendered in Babylon's default white. Worse, it did
+   * not recover: the next createInboundStaging built a fresh material under the same name,
+   * but nothing reassigns it to meshes that already exist, so they stayed white until the
+   * whole scene was rebuilt.
+   *
+   * <p>Only the per-load label material belongs to this item, so only that is disposed. */
+  private disposeCargoVisual(item: CargoItem): void {
+    const own = (item.meshes ?? [])
+      .map((mesh) => mesh.material)
+      .filter((material) => !!material && material.name.startsWith("inboundLabelMaterial-"));
+    item.root.dispose(false, false);
+    for (const material of own) material?.dispose();
+  }
+
   private releaseCargo(item: CargoItem, reason: string): void {
     item.carried = false;
     item.root.setParent(this.warehouseRoot ?? null);
@@ -1727,7 +1773,7 @@ export default class WarehouseScene {
     // Mixing an absolute position with a local one puts the box in the wrong place
     // the moment the root is ever transformed.
     const from = parked.root.position.clone();
-    parked.root.dispose(false, true);
+    this.disposeCargoVisual(parked);
     replacement.root.position.copyFrom(from);
     replacement.root.scaling.set(1, 1, 1);
     this.animateCargoPlacement(replacement, target, targetRotationY);
@@ -1810,7 +1856,7 @@ export default class WarehouseScene {
     const easing = new CubicEase();
     easing.setEasingMode(EasingFunction.EASINGMODE_EASEIN);
     animation.setEasingFunction(easing);
-    this.scene.beginDirectAnimation(item.root, [animation], 0, 24, false, 1, () => item.root.dispose(false, true));
+    this.scene.beginDirectAnimation(item.root, [animation], 0, 24, false, 1, () => this.disposeCargoVisual(item));
   }
 
   private createConcreteFloorMaterial(baseColor: string): StandardMaterialType {
