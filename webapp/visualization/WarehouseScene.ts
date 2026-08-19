@@ -56,6 +56,18 @@ interface CargoItem {
 
 interface PoseSample { receivedAt: number; x: number; z: number; theta: number; velocity: number; }
 
+/** Fork height and reach, buffered and interpolated exactly like {@link PoseSample}.
+ *
+ * <p>These used to be assigned straight onto the transform the moment telemetry landed,
+ * while the chassis went through the pose buffer -- so the vehicle glided and the mast it
+ * carries snapped. The load is a child of the fork assembly, so the mismatch was visible
+ * as the pallet leading or lagging the truck under it, and every coalesced sample became
+ * a jump instead of degrading gracefully. Kept in its own buffer rather than folded into
+ * PoseSample because handling telemetry never reaches {@link WarehouseScene.setAgvState}
+ * at all, and because a lift happens while the vehicle is stationary -- the pose buffer's
+ * "only if x/z/theta moved" test would drop every fork sample that matters. */
+interface ForkSample { receivedAt: number; height: number; extension: number; }
+
 // Double both dimensions to provide four times the original floor area.
 // West-wall conveyor penetration (V23). The opening spans both lane envelopes
 // (z 12.7..14.1 and 14.7..16.1) with ~0.3 m of reveal each side; WALL-W stops at
@@ -64,6 +76,18 @@ const SHIPPING_WALL_X = -23.45;
 const SHIPPING_OPENING_MIN_Z = 12.4;
 const SHIPPING_OPENING_MAX_Z = 16.4;
 const WALL_HEIGHT = 1.1;
+// The structural opening is 4 m wide but the two belt envelopes only account for
+// 2.4 m of it, so 1.6 m was simply missing wall -- 0.4 m of reveal at each end and a
+// 0.8 m hole straight through the building between the lanes. The lanes are data
+// (CONV-OUT-01/02 sit at z 13.4 and 15.4, 1.4 m deep), so the infill is derived from
+// them rather than hard-coded, and stays correct if a lane ever moves.
+const SHIPPING_LANE_ENVELOPES: ReadonlyArray<readonly [number, number]> = [[12.7, 14.1], [14.7, 16.1]];
+// Cargo rides the rollers at y 0.92 and stands 0.56 m tall, so it needs 1.48 m of
+// clear height; the header used to sit at 1.10 and every carton passed bodily through
+// it. The wall is only a 1.1 m parapet, so the frame is lifted into a portal that
+// projects above the wall line -- which is what a real dock opening does -- rather
+// than raising the whole building.
+const SHIPPING_PORTAL_HEIGHT = 1.6;
 // Exterior slab carrying the belt overhang and the relocated trailer bay.
 const APRON_WIDTH = 8;
 const APRON_DEPTH = 14;
@@ -93,6 +117,17 @@ const FLOOR_HALF_DEPTH = 18;
 /** Collision radius used to detect the live vehicle overlapping rack geometry. */
 const FORKLIFT_RADIUS = 0.72;
 const MAX_FORK_HEIGHT = 2.75;
+/** Reach travel. Was an unnamed .7 inline in setAgvOperations. */
+const MAX_FORK_EXTENSION = .7;
+/** Both telemetry buffers render this far behind wall-clock, so the mast and the chassis
+ * -- and therefore the pallet hanging off the mast -- are read at the same instant. */
+const RENDER_DELAY_MS = 150;
+/** Fork samples further apart than this are a new stream, not a slow move: snap. The
+ * simulator only publishes handling while a moveFork is running, so the quiet between
+ * two lifts is seconds long and interpolating across it would make the next lift creep. */
+const FORK_STREAM_GAP_MS = 400;
+/** updateForkFrame only ever reads the first two entries; the rest is slack. */
+const FORK_BUFFER_LIMIT = 8;
 /** WASD pans the camera. Fractions of the orbit radius travelled per second, so the pan
  * feels the same when zoomed into an aisle as when viewing the whole facility: roughly
  * 2.8 m/s fully zoomed in and 18 m/s fully out. Tuned down from 0.55, which crossed the
@@ -142,6 +177,12 @@ export default class WarehouseScene {
   private forklift?: TransformNodeType;
   private forkliftLift?: TransformNodeType;
   private readonly poseBuffer: PoseSample[] = [];
+  private readonly forkBuffer: ForkSample[] = [];
+  /** Loads whose slot rebuild is currently suppressed because the fork holds them,
+   * keyed `${source}:${loadId}`. Only used to keep the telemetry to one event per
+   * handover: syncRackCargo runs on every snapshot, and the animation ring holds 500
+   * entries that cargo-handover.spec.ts reads its CARGO_ORPHANED pairs out of. */
+  private readonly suppressedRebuilds = new Set<string>();
   private lastRenderedPosition?: Vector3Type;
   private readonly wheelMeshes: Mesh[] = [];
   private forkliftForkAssembly?: TransformNodeType;
@@ -199,6 +240,13 @@ export default class WarehouseScene {
 
     const skyLight = new HemisphericLight("skyLight", new Vector3(0, 1, 0), this.scene);
     skyLight.intensity = 0.8;
+    // Babylon defaults groundColor to pure black, and scene.ambientColor is black too, so
+    // with one up-facing hemispheric and one directional key every face pointing downwards
+    // or away from the key received *zero* light -- not dim, zero. Crates sitting inside a
+    // rack rendered as black silhouettes, and the same pallet appeared to "pop" to full
+    // illumination the moment the fork carried it into the key. A dim concrete-toned bounce
+    // is the fill an indoor slab actually provides.
+    skyLight.groundColor = new Color3(0.26, 0.28, 0.31);
     const keyLight = new DirectionalLight("keyLight", new Vector3(-0.6, -1, 0.4), this.scene);
     keyLight.position = new Vector3(7, 12, -7);
     keyLight.intensity = 1.1;
@@ -246,7 +294,13 @@ export default class WarehouseScene {
     this.forkliftStops = [Vector3.FromArray(config.forkliftStops[0]), Vector3.FromArray(config.forkliftStops[1])];
     this.createForklift(previousForkliftPosition ?? this.forkliftStops[0], config.accentColor);
     if (previousForkliftRotation !== undefined && this.forklift) this.forklift.rotation.y = previousForkliftRotation;
-    if (config.carriedLoadId) this.createLiveCarriedCargo(config.carriedLoadId);
+    // Go through syncCarriedCargo rather than building a carried visual outright. The rack
+    // and staging passes above have already built a pallet for this load from the same
+    // config, so creating a second one here left two on screen -- and because
+    // syncCarriedCargo early-returns once carriedCargo matches, that pair was never
+    // reconciled. Reparenting the existing one instead is both one pallet and the right
+    // shape; it still falls back to createLiveCarriedCargo when the load is in neither list.
+    this.syncCarriedCargo(config.carriedLoadId);
     this.updateChargingIndicators(config.chargingStationId);
     this.telemetry("SCENE_CONFIGURED", {
       warehouseId: config.id, racks: config.racks.length, obstacles: config.obstacles?.length ?? 0,
@@ -289,8 +343,28 @@ export default class WarehouseScene {
   public setAgvOperations(agv: ApiAgv): void {
     this.syncCarriedCargo(agv.carriedLoadId);
     this.updateChargingIndicators(agv.charging ? agv.currentStationId : undefined);
-    if (this.forkliftLift) this.forkliftLift.position.y = Math.max(0, Math.min(MAX_FORK_HEIGHT, agv.forkHeight ?? 0));
-    if (this.forkliftForkAssembly) this.forkliftForkAssembly.position.z = -Math.max(0, Math.min(.7, agv.forkExtension ?? 0));
+    this.pushForkSample(agv.forkHeight, agv.forkExtension);
+  }
+
+  /** Fork telemetry rides its own stream -- AGV_HANDLING_UPDATED at ~20 Hz -- which never
+   * reaches setAgvState and therefore never reaches the pose buffer. It cannot share that
+   * buffer either: mergeAgvEvent replaces the pose on a handling event with the client's
+   * own last-known pose, so a fork sample smuggled in as a PoseSample would re-anchor the
+   * chassis segment at a stale position under a fresh timestamp and stall the vehicle.
+   *
+   * <p>Deliberately no value dedupe. The pose buffer drops repeats, but doing that here
+   * would leave the newest sample stamped seconds in the past, so the first frame of a
+   * lift would render at progress ~1 and jump -- precisely the staircase this removes. */
+  private pushForkSample(height?: number, extension?: number): void {
+    const sample = {
+      receivedAt: performance.now(),
+      height: Math.max(0, Math.min(MAX_FORK_HEIGHT, height ?? 0)),
+      extension: Math.max(0, Math.min(MAX_FORK_EXTENSION, extension ?? 0))
+    };
+    const previous = this.forkBuffer.at(-1);
+    if (previous && sample.receivedAt - previous.receivedAt > FORK_STREAM_GAP_MS) this.forkBuffer.length = 0;
+    this.forkBuffer.push(sample);
+    while (this.forkBuffer.length > FORK_BUFFER_LIMIT) this.forkBuffer.shift();
   }
 
   public resize(): void {
@@ -502,11 +576,34 @@ export default class WarehouseScene {
     }
   };
 
+  /** The chassis interpolation, run against the fork's own buffer and the caller's clock.
+   * After this, forkliftLift.position.y has exactly one writer -- the render loop -- which
+   * is what makes the smoothing safe. */
+  private updateForkFrame(renderAt: number): void {
+    if (this.forkBuffer.length === 0) return;
+    while (this.forkBuffer.length > 2 && this.forkBuffer[1].receivedAt <= renderAt) this.forkBuffer.shift();
+    const from = this.forkBuffer[0];
+    const to = this.forkBuffer[1] ?? from;
+    const span = Math.max(1, to.receivedAt - from.receivedAt);
+    const progress = Math.max(0, Math.min(1, (renderAt - from.receivedAt) / span));
+    if (this.forkliftLift) this.forkliftLift.position.y = from.height + (to.height - from.height) * progress;
+    // Extension travels along -z, matching the frame the fork assembly is built in.
+    if (this.forkliftForkAssembly)
+      this.forkliftForkAssembly.position.z = -(from.extension + (to.extension - from.extension) * progress);
+  }
+
   private readonly updateFrame = (): void => {
     this.updateCameraPan();
     this.sweepPendingCargo();
+    // One clock for both buffers: the carried pallet is a child of the fork assembly, so
+    // reading the mast at a different instant from the chassis makes the load lead or lag
+    // the vehicle underneath it.
+    const renderAt = performance.now() - RENDER_DELAY_MS;
+    // Above the pose guard on purpose. The vehicle is stationary for the whole of a lift --
+    // moveFork runs at velocity 0 with x/z/theta unchanged -- so the pose buffer receives
+    // nothing at exactly the moment the mast is moving fastest.
+    this.updateForkFrame(renderAt);
     if (!this.forklift || this.poseBuffer.length === 0) return;
-    const renderAt = performance.now() - 150;
     while (this.poseBuffer.length > 2 && this.poseBuffer[1].receivedAt <= renderAt) this.poseBuffer.shift();
     const from = this.poseBuffer[0];
     const to = this.poseBuffer[1] ?? from;
@@ -718,8 +815,22 @@ export default class WarehouseScene {
     });
   }
 
+  /** One event per handover, not one per snapshot: syncRackCargo runs on every refresh,
+   * and the animation telemetry ring holds 500 entries that cargo-handover.spec.ts reads
+   * its CARGO_ORPHANED/CARGO_ADOPTED pairs out of. Flooding it would evict the very
+   * events that spec asserts on. */
+  private noteCarriedRebuildSuppressed(loadId: string, source: "RACK" | "STAGING", rackId?: string): void {
+    const key = `${source}:${loadId}`;
+    if (this.suppressedRebuilds.has(key)) return;
+    this.suppressedRebuilds.add(key);
+    this.telemetry("CARGO_REBUILD_SUPPRESSED", { loadId, source, owner: "FORK", ...(rackId ? { rackId } : {}) });
+  }
+
   private syncCarriedCargo(loadId?: string): void {
     if (loadId && this.carriedCargo?.id === loadId) return;
+    // The fork's load is changing, so any suppression recorded against the old one is
+    // spent; keeping it would silence the telemetry for the next genuine handover.
+    this.suppressedRebuilds.clear();
     if (this.carriedCargo) {
       const previous = this.carriedCargo;
       this.carriedCargo = undefined;
@@ -749,15 +860,10 @@ export default class WarehouseScene {
     this.telemetry("CARGO_ATTACHED", { loadId });
   }
 
-  private animateForkHeight(height: number, frames: number): void {
-    if (!this.forkliftLift) return;
-    const animation = new Animation("liveForkHeight", "position.y", 60, Animation.ANIMATIONTYPE_FLOAT, Animation.ANIMATIONLOOPMODE_CONSTANT);
-    animation.setKeys([{ frame: 0, value: this.forkliftLift.position.y }, { frame: frames, value: height }]);
-    const easing = new CubicEase();
-    easing.setEasingMode(EasingFunction.EASINGMODE_EASEINOUT);
-    animation.setEasingFunction(easing);
-    this.scene.beginDirectAnimation(this.forkliftLift, [animation], 0, frames, false);
-  }
+  // animateForkHeight lived here: a tween onto forkliftLift.position.y that nothing ever
+  // called. Now that updateForkFrame owns that property it would be a silent second writer
+  // whose winner depends on Babylon ordering _animate() against onBeforeRenderObservable,
+  // so it is gone rather than left as a trap for whoever revived it.
 
   private createObstacle(obstacle: ObstacleDefinition): void {
     const material = obstacle.type === "WALL"
@@ -985,6 +1091,9 @@ export default class WarehouseScene {
     }
     desired.forEach((load, index) => {
       if (this.inboundCargoItems.some((item) => item.id === load.id)) return;
+      // Same defect as syncRackCargo, from the staging side: the pallet is on the fork and
+      // inboundCargoItems no longer proves it, so a second one appeared back in the lane.
+      if (load.id === this.carriedCargo?.id) { this.noteCarriedRebuildSuppressed(load.id, "STAGING"); return; }
       const handedOver = this.pendingCargo.has(load.id);
       this.addInboundCargo(load, index, !handedOver);
       const created = this.inboundCargoItems.find((item) => item.id === load.id);
@@ -1135,25 +1244,46 @@ export default class WarehouseScene {
     const safety = this.createMaterial(`shippingDoorSafety-${station.id}`, "#e87518");
 
     // Jambs close the reveal either side of the opening, so the wall reads as cut
-    // rather than as merely absent between two segments.
+    // rather than as merely absent between two segments. They run the full portal
+    // height, not just the parapet, so the raised opening still reads as framed.
     for (const z of [SHIPPING_OPENING_MIN_Z, SHIPPING_OPENING_MAX_Z]) {
-      const jamb = MeshBuilder.CreateBox(`shippingJamb-${station.id}`, { width: 0.34, height: WALL_HEIGHT, depth: 0.22 }, this.scene);
-      jamb.position.set(SHIPPING_WALL_X, WALL_HEIGHT / 2, z);
+      const jamb = MeshBuilder.CreateBox(`shippingJamb-${station.id}`, { width: 0.34, height: SHIPPING_PORTAL_HEIGHT, depth: 0.22 }, this.scene);
+      jamb.position.set(SHIPPING_WALL_X, SHIPPING_PORTAL_HEIGHT / 2, z);
       jamb.material = steel;
       jamb.parent = this.warehouseRoot ?? null;
     }
 
+    // Infill the parts of the structural opening no belt passes through: the reveal at
+    // each end and, most visibly, the gap between the two lanes. Without these you can
+    // see straight through the building between the belts.
+    const infillSpans: Array<[number, number]> = [];
+    let edge = SHIPPING_OPENING_MIN_Z;
+    for (const [laneMin, laneMax] of SHIPPING_LANE_ENVELOPES) {
+      if (laneMin > edge) infillSpans.push([edge, laneMin]);
+      edge = Math.max(edge, laneMax);
+    }
+    if (SHIPPING_OPENING_MAX_Z > edge) infillSpans.push([edge, SHIPPING_OPENING_MAX_Z]);
+    const wallMaterial = this.createMaterial(`shippingInfill-${station.id}`, "#c7cbc8");
+    for (const [spanMin, spanMax] of infillSpans) {
+      const panel = MeshBuilder.CreateBox(`shippingInfill-${station.id}`,
+        { width: 0.18, height: WALL_HEIGHT, depth: spanMax - spanMin }, this.scene);
+      panel.position.set(SHIPPING_WALL_X, WALL_HEIGHT / 2, (spanMin + spanMax) / 2);
+      panel.material = wallMaterial;
+      panel.parent = this.warehouseRoot ?? null;
+    }
+
     // Header spanning the opening, with the roller drum a shutter would wind onto.
+    // Sits on top of the portal so its underside clears the cargo profile.
     const openingWidth = SHIPPING_OPENING_MAX_Z - SHIPPING_OPENING_MIN_Z;
     const openingCentreZ = (SHIPPING_OPENING_MIN_Z + SHIPPING_OPENING_MAX_Z) / 2;
     const header = MeshBuilder.CreateBox(`shippingHeader-${station.id}`, { width: 0.3, height: 0.34, depth: openingWidth }, this.scene);
-    header.position.set(SHIPPING_WALL_X, WALL_HEIGHT + 0.17, openingCentreZ);
+    header.position.set(SHIPPING_WALL_X, SHIPPING_PORTAL_HEIGHT + 0.17, openingCentreZ);
     header.material = steel;
     header.parent = this.warehouseRoot ?? null;
 
     const drum = MeshBuilder.CreateCylinder(`shippingDoorDrum-${station.id}`, { diameter: 0.3, height: openingWidth - 0.5, tessellation: 16 }, this.scene);
     drum.rotation.x = Math.PI / 2;
-    drum.position.set(SHIPPING_WALL_X + 0.3, WALL_HEIGHT + 0.16, openingCentreZ);
+    drum.position.set(SHIPPING_WALL_X + 0.3, SHIPPING_PORTAL_HEIGHT + 0.16, openingCentreZ);
     drum.material = steel;
     drum.parent = this.warehouseRoot ?? null;
 
@@ -1529,6 +1659,13 @@ export default class WarehouseScene {
       if (!parts) continue;
       for (const [id, target] of desired) {
         if (target.rack.id !== rack.id || this.cargoItems.some((item) => item.id === id)) continue;
+        // The fork is holding this pallet. syncCarriedCargo splices the carried visual out
+        // of cargoItems, and that same list is the "already built" test above -- so the
+        // snapshot, which goes on listing the load in its old slot until the task status
+        // catches up, built a second pallet on the shelf while the first rode away on the
+        // fork. Measured on the live stack at 7.6 s of dual ownership and a duplicate mesh
+        // that outlived the carry by twelve seconds.
+        if (id === this.carriedCargo?.id) { this.noteCarriedRebuildSuppressed(id, "RACK", rack.id); continue; }
         // A load arriving on a shelf it was just carried to already has a visual in
         // flight; glide that one into the slot instead of popping a second one in.
         const handedOver = this.pendingCargo.has(id);
@@ -1867,6 +2004,11 @@ export default class WarehouseScene {
     this.cargoPalletMaterial = undefined;
     this.conveyorCargoItems.length = 0;
     this.poseBuffer.length = 0;
+    // createForklift builds a fresh lift node at y=0; a surviving buffer would drive it to
+    // the pre-rebuild height on the first frame, before any telemetry confirms the vehicle
+    // still holds anything. applySnapshot re-seeds both in the same tick.
+    this.forkBuffer.length = 0;
+    this.suppressedRebuilds.clear();
     this.wheelMeshes.length = 0;
     this.chargingIndicators.clear();
     this.conveyorStations.clear();
