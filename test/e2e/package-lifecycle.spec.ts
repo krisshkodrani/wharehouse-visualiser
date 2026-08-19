@@ -23,7 +23,15 @@ interface Snapshot {
 
 type BrowserMessages = string[];
 
-const SKEW_MS = 240_000;
+/** Per-test budgets, each comfortably above the polls inside that test.
+ *
+ * These all shared a single 240 s constant misleadingly named SKEW_MS, while "package is
+ * sent out" polls for up to 90 + 180 + 30 = 300 s. A slow but healthy run therefore died on
+ * the generic test timeout instead of the poll's own message, which is exactly what hid the
+ * real cause of a failure the first time this suite was run. */
+const COLLECT_BUDGET_MS = 120_000;
+const STORE_BUDGET_MS = 240_000;
+const SHIP_BUDGET_MS = 420_000;
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
@@ -60,7 +68,7 @@ async function resetAndSpeedUp(request: APIRequestContext) {
 }
 
 test("package is collected", async ({ page, request }, testInfo) => {
-  test.setTimeout(SKEW_MS);
+  test.setTimeout(COLLECT_BUDGET_MS);
   test.skip(!process.env.E2E_BASE_URL, "This scenario requires the live Docker application.");
 
   await resetAndSpeedUp(request);
@@ -76,7 +84,7 @@ test("package is collected", async ({ page, request }, testInfo) => {
 });
 
 test("package is stored", async ({ page, request }, testInfo) => {
-  test.setTimeout(SKEW_MS);
+  test.setTimeout(STORE_BUDGET_MS);
   test.skip(!process.env.E2E_BASE_URL, "This scenario requires the live Docker application.");
 
   await resetAndSpeedUp(request);
@@ -105,7 +113,7 @@ test("package is stored", async ({ page, request }, testInfo) => {
 });
 
 test("package is sent out", async ({ page, request }, testInfo) => {
-  test.setTimeout(SKEW_MS);
+  test.setTimeout(SHIP_BUDGET_MS);
   test.skip(!process.env.E2E_BASE_URL, "This scenario requires the live Docker application.");
 
   await resetAndSpeedUp(request);

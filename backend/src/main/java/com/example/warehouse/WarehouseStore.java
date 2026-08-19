@@ -535,7 +535,20 @@ class WarehouseStore {
         (rs, n) -> new ParkingRow(rs.getString("id"), rs.getString("map_node_id"), rs.getDouble("x"), rs.getDouble("z"), rs.getDouble("rotation_y")));
   }
 
-  boolean enqueueParking(String parkingId, String orderJson) {
+  /** True for an order this service published that has no task behind it -- a park or
+   * charge move. Housekeeping orders are real VDA orders on the wire, so the vehicle
+   * reports state against them, but they carry no transport task to transition. Without
+   * this the lookup treated every one of those states as an unknown task and rejected it:
+   * 5,704 rejections in three hours on the reference stack, each one logged at WARN and
+   * published as AGV_MESSAGE_REJECTED, so the operator view showed a protocol failure
+   * every time the vehicle drove to a charger. */
+  boolean isHousekeepingOrder(String orderId) {
+    Integer known = jdbc.queryForObject(
+        "select count(*) from vda_dispatch where order_id=? and task_id is null", Integer.class, orderId);
+    return known != null && known > 0;
+  }
+
+  boolean enqueueParking(String parkingId, String orderId, String orderJson) {
     int reserved = jdbc.update("update location set reserved=reserved+1 where id=? and type='PARKING_CHARGING' and occupied+reserved<capacity", parkingId);
     if (reserved != 1) return false;
     int claimed = jdbc.update("update agv set status='PARKING',task_id=null,current_station_id=?,charging=false where id='FL-01' and status='IDLE' and not exists (select 1 from transport_task where status in ('DISPATCHED','ACCEPTED','EXECUTING'))", parkingId);
@@ -543,6 +556,10 @@ class WarehouseStore {
       jdbc.update("update location set reserved=greatest(0,reserved-1) where id=?", parkingId);
       return false;
     }
+    // Recorded in the same audit table as every other published order, with a null task.
+    // A park move used to leave no trace at all, which is why its state messages could not
+    // be told apart from a genuinely unknown order.
+    recordDispatch(null, "FL-01", orderId, 0, orderJson);
     jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", "vda5050/v3/demo/FL-01/order", orderJson);
     return true;
   }

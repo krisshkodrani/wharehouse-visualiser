@@ -195,7 +195,7 @@ class DispatchService {
     candidate.ifPresent(value -> {
       Vda5050.Order order = movementOrder(value.route(), value.parking(), "FL-01");
       validator.validate("order", order);
-      if (store.enqueueParking(value.parking().id(), write(order)))
+      if (store.enqueueParking(value.parking().id(), order.orderId(), write(order)))
         events.publish("AGV_PARKING_DISPATCHED", Map.of("parkingId", value.parking().id(), "route", value.route()));
     });
   }

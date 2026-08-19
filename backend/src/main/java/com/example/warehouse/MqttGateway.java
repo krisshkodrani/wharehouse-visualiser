@@ -202,6 +202,12 @@ class MqttGateway {
       metrics.mqttAccepted(topic);
       if (state.powerSupply() != null) store.updatePower(agvId, state.powerSupply().stateOfCharge(), state.powerSupply().charging());
       UUID jobId = uuid(state.orderId());
+      // A park or charge move is a real VDA order with no transport task behind it, so
+      // there is nothing to accept or transition -- but it is ours, and reporting state
+      // against it is correct vehicle behaviour, not a protocol violation. Treating it as
+      // an unknown task rejected every state message for the length of the drive, put a
+      // false error in front of the operator, and skipped the AGV_UPDATED below with it.
+      if (jobId != null && store.isHousekeepingOrder(state.orderId())) jobId = null;
       if (jobId != null) {
         if (consumeInstantAction(state, "cancelOrder")) {
           execution.cancelled(jobId);
