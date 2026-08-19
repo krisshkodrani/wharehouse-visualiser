@@ -1,6 +1,6 @@
 {
   "name": "@aipoweredapps/warehouse-visualizer",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "scripts": {
     "bundle:babylon": "node scripts/build-babylon.mjs",
