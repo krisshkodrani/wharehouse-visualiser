@@ -12,6 +12,8 @@
     "test": "npm run test:e2e",
     "test:unit": "ui5 serve --port 8081",
     "test:e2e": "playwright test",
+    "test:e2e:package": "playwright test test/e2e/package-lifecycle.spec.ts",
+    "test:e2e:package:record": "node scripts/run-package-e2e.mjs",
     "test:e2e:headed": "playwright test --headed",
     "audit:production": "npm audit --omit=dev --audit-level=moderate",
     "audit:toolchain": "npm audit"

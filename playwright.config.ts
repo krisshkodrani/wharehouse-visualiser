@@ -2,6 +2,12 @@ import { defineConfig, devices } from "@playwright/test";
 
 const externalBaseUrl = process.env.E2E_BASE_URL;
 const recordVideo = process.env.E2E_VIDEO === "on";
+const jsonReportPath = process.env.E2E_JSON_REPORT_PATH;
+const reporters = [["list"], ["html", { open: "never" }]];
+
+if (jsonReportPath) {
+  reporters.push(["json", { outputFile: jsonReportPath }]);
+}
 
 export default defineConfig({
   testDir: "./test/e2e",
@@ -14,7 +20,7 @@ export default defineConfig({
   workers: 1,
   timeout: 120_000,
   expect: { timeout: 60_000 },
-  reporter: [["list"], ["html", { open: "never" }]],
+  reporter: reporters,
   use: {
     baseURL: externalBaseUrl || "http://localhost:8082",
     trace: "retain-on-failure",

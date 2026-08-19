@@ -64,6 +64,22 @@ npm run build
 npm test
 ```
 
+Package flow e2e suite for package collection/store/send-out lives in `test/e2e/package-lifecycle.spec.ts`.
+
+```powershell
+npm run test:e2e:package              # run package flow cases once
+npm run test:e2e:package:record        # run package flow and write a run bundle
+```
+
+The recorder creates `artifacts/e2e-runs/<timestamp>/` with:
+
+- `run-summary.json` (run metadata and command)
+- `playwright-results.json` (machine-readable test result payload)
+- `playwright-report/` and `test-results/` (Playwright artifacts)
+- `docker-compose.log` (best-effort for local compose runs)
+
+Use the recorded folder as input for analysis tooling and historical comparisons.
+
 The repository includes a self-bootstrapping Maven Wrapper, so no global Maven installation is required:
 
 ```powershell
