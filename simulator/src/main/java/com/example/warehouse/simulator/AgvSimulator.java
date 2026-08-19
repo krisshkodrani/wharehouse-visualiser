@@ -55,6 +55,13 @@ class AgvSimulator {
   private volatile String activeOrder;
   private final AtomicReference<Vda5050.Order> activeOrderPayload = new AtomicReference<>();
   private volatile boolean cancelRequested;
+  /** Set when a newly arrived order supersedes the one in flight. Distinct from
+   * {@link #cancelRequested}: a preempted order is abandoned, not cancelled, so it must not
+   * drop the load or report ORDER_CANCELLED to master control. */
+  private volatile boolean preemptRequested;
+  /** The superseding order, held until the running one releases so two executions can never
+   * fight over the pose. */
+  private final AtomicReference<Vda5050.Order> pendingOrder = new AtomicReference<>();
   private volatile String lastNodeId = "";
   private volatile long lastNodeSequenceId;
   private volatile List<Map<String, Object>> instantActionStates = List.of();
@@ -164,21 +171,20 @@ class AgvSimulator {
         return;
       }
       if (completedOrders.contains(order.orderId())) return;
-      if (activeOrder != null) return;
-      charging = false;
-      handlingPhase = "IDLE";
-      currentStationId = null;
-      activeOrder = order.orderId();
-      activeOrderPayload.set(order);
-      cancelRequested = false;
-      // Instant actions belong to the order they were issued against. Reporting a
-      // finished cancelOrder alongside a freshly accepted order tells the master
-      // control that this order was cancelled too.
-      instantActionStates = List.of();
-      publishHandling();
-      telemetry("ORDER_ACCEPTED", "order=" + order.orderId() + " nodes=" + order.nodes().size());
-      long epoch = simulationEpoch.get();
-      executor.submit(() -> execute(order, epoch));
+      if (activeOrder != null) {
+        // This used to `return`, dropping the order on the floor with no log and no
+        // rejection: master control had already recorded it as dispatched, so the task sat
+        // in DISPATCHED for ever and its load was stranded. Master control only ever hands
+        // out an order when it has claimed a vehicle with no task_id, so anything active
+        // here is a housekeeping move (the park drive) and is legitimately preemptable.
+        // The order is queued rather than started so two executions cannot fight over the
+        // pose; the running one picks it up as it unwinds.
+        pendingOrder.set(order);
+        preemptRequested = true;
+        telemetry("ORDER_PREEMPTS_ACTIVE", "order=" + order.orderId() + " supersedes=" + activeOrder);
+        return;
+      }
+      accept(order);
     } catch (Exception exception) {
       System.err.println("Rejected order: " + exception.getMessage());
     }
@@ -240,12 +246,40 @@ class AgvSimulator {
         publishHandling();
         publishVisualization(0);
         telemetry("ORDER_CANCELLED", "order=" + order.orderId());
+      } else if (preemptRequested) {
+        // Abandoned, not cancelled. Nothing is reported to master control and the fork is
+        // left exactly as it is: the superseded order is a park drive that carries nothing,
+        // and claiming a cancellation here would tell master control the *new* order died.
+        velocity = 0;
+        telemetry("ORDER_PREEMPTED", "order=" + order.orderId());
       } else System.err.println("Order failed: " + exception.getMessage());
     } finally {
       if (order.orderId().equals(activeOrder)) activeOrder = null;
       activeOrderPayload.set(null);
       cancelRequested = false;
+      preemptRequested = false;
+      // Start whatever superseded this one, now that the pose is no longer being driven.
+      Vda5050.Order queued = pendingOrder.getAndSet(null);
+      if (queued != null) accept(queued);
     }
+  }
+
+  /** Begins an order that has already been validated and cleared for execution. */
+  private void accept(Vda5050.Order order) {
+    charging = false;
+    handlingPhase = "IDLE";
+    currentStationId = null;
+    activeOrder = order.orderId();
+    activeOrderPayload.set(order);
+    cancelRequested = false;
+    // Instant actions belong to the order they were issued against. Reporting a
+    // finished cancelOrder alongside a freshly accepted order tells the master
+    // control that this order was cancelled too.
+    instantActionStates = List.of();
+    publishHandling();
+    telemetry("ORDER_ACCEPTED", "order=" + order.orderId() + " nodes=" + order.nodes().size());
+    long epoch = simulationEpoch.get();
+    executor.submit(() -> execute(order, epoch));
   }
 
   private void awaitReleased(int nodeIndex, long epoch) throws Exception {
@@ -414,6 +448,9 @@ class AgvSimulator {
         paused = false;
         activeOrder = null;
         completedOrders.clear();
+        // A queued preemption belongs to the epoch that is being torn down.
+        pendingOrder.set(null);
+        preemptRequested = false;
         battery = ((Number) value.getOrDefault("battery", 82)).doubleValue();
         velocity = 0;
         forkHeight = 0;
@@ -460,6 +497,7 @@ class AgvSimulator {
     while (paused && epoch == simulationEpoch.get()) Thread.sleep(50);
     if (epoch != simulationEpoch.get()) throw new InterruptedException("Simulation reset");
     if (cancelRequested) throw new InterruptedException("Order cancelled");
+    if (preemptRequested) throw new InterruptedException("Order preempted");
   }
 
   private void controlledSleep(long milliseconds, long epoch) throws InterruptedException {

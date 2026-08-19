@@ -145,6 +145,40 @@ class DispatchService {
     });
   }
 
+  /** Grace before a cancelled-but-unreleased pallet is swept up, and before a task that a
+   * vehicle never started is reported. Long enough that a healthy round trip always wins. */
+  private static final int RECONCILE_GRACE_SECONDS = 15;
+
+  /** Safety net for work that stopped making progress without anyone being told.
+   *
+   * <p>Two failures used to be silent. A cancelled order whose vehicle never echoed the
+   * cancelOrder left its pallet stranded in IN_TRANSIT for ever, because the release is a
+   * side effect of that echo. And a task published to the broker but never started simply
+   * sat in DISPATCHED: no retry, no timeout, no log -- the pallet just never moved. Neither
+   * is acceptable for the command path, which is meant to be the durable half of the system. */
+  @Scheduled(fixedDelay = 5000, initialDelay = 8000)
+  public void reconcileStalledWork() {
+    for (WarehouseStore.TaskRow task : store.tasksAwaitingCancellation(RECONCILE_GRACE_SECONDS)) {
+      store.completeCancellation(task.id());
+      try (var scope = LogContext.of(LogContext.EVENT, "CANCELLATION_RECONCILED")
+          .and(LogContext.REASON, "NO_VEHICLE_ACKNOWLEDGEMENT")
+          .and(LogContext.TASK_ID, task.id())
+          .and(LogContext.LOAD_ID, task.loadId()).open()) {
+        log.warn("released a cancelled task's load after {}s without an acknowledgement from the vehicle",
+            RECONCILE_GRACE_SECONDS);
+      }
+      events.publish("TRANSPORT_TASK_UPDATED", view(task, "CANCELLED"));
+    }
+    for (WarehouseStore.TaskRow task : store.tasksStalledInDispatch(RECONCILE_GRACE_SECONDS)) {
+      try (var scope = LogContext.of(LogContext.EVENT, "DISPATCH_STALLED")
+          .and(LogContext.TASK_ID, task.id())
+          .and(LogContext.VEHICLE_ID, task.assignedAgvId())
+          .and(LogContext.LOAD_ID, task.loadId()).open()) {
+        log.warn("task has been DISPATCHED for over {}s without the vehicle starting it", RECONCILE_GRACE_SECONDS);
+      }
+    }
+  }
+
   @Scheduled(fixedDelay = 3000, initialDelay = 5000)
   public void parkIfIdle() {
     record Candidate(WarehouseStore.ParkingRow parking, List<String> route, double distance) {}

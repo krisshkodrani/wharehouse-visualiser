@@ -408,6 +408,33 @@ class WarehouseStore {
     return transportOrder(orderId).orElseThrow(() -> new IllegalArgumentException("Unknown transport order"));
   }
 
+  /** Tasks whose order is cancelled but whose pallet was never given back.
+   *
+   * <p>{@link #completeCancellation} is what returns the load to its source, and it runs
+   * only when the vehicle echoes a finished cancelOrder instant action. If the vehicle was
+   * not executing that task -- parked, mid-park, or holding an order it never started --
+   * the echo never comes, the order is left CANCELLED, and the load sits in IN_TRANSIT:
+   * not INBOUND so it cannot be put away, not STORED so it can never ship. Inventory
+   * correctness must not depend on the vehicle answering, so this is swept up instead.
+   *
+   * <p>Deliberately grace-delayed rather than immediate: handling telemetry is
+   * latest-value-wins, so releasing while the fork is still reporting the load would let
+   * updateHandling write it straight back onto the vehicle. */
+  List<TaskRow> tasksAwaitingCancellation(int graceSeconds) {
+    return jdbc.query("select t.* from transport_task t join transport_order o on o.id=t.request_id "
+        + "where o.status='CANCELLED' and t.status in ('DISPATCHED','ACCEPTED','EXECUTING') "
+        + "and t.updated_at < now() - make_interval(secs => ?)",
+        (rs, n) -> task(rs), graceSeconds);
+  }
+
+  /** Tasks handed to a vehicle that never started them. A task in DISPATCHED with no
+   * started_at has been published to the broker and forgotten: nothing retries it and
+   * nothing times it out, so it is invisible until someone notices the pallet never moved. */
+  List<TaskRow> tasksStalledInDispatch(int graceSeconds) {
+    return jdbc.query("select * from transport_task where status='DISPATCHED' and started_at is null "
+        + "and updated_at < now() - make_interval(secs => ?)", (rs, n) -> task(rs), graceSeconds);
+  }
+
   void completeCancellation(UUID taskId) {
     job(taskId).ifPresent(task -> {
       releaseCancelledTask(task);
