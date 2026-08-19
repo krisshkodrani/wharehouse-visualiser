@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { resetToQuiet } from "./support/warehouse";
 
 interface LoadState {
   id: string;
@@ -62,9 +63,10 @@ async function getSnapshot(request: APIRequestContext): Promise<Snapshot> {
   return response.json() as Promise<Snapshot>;
 }
 
+// Delegates to the shared barrier: reset alone returns before the simulator has acted on
+// it, so a spec that reset and queued work immediately raced the previous spec's vehicle.
 async function resetAndSpeedUp(request: APIRequestContext) {
-  await request.post("/api/v1/warehouses/linz/operations/reset", { data: {} });
-  await request.post("/api/v1/warehouses/linz/operations/speed", { data: { multiplier: 2 } });
+  await resetToQuiet(request, 2);
 }
 
 test("package is collected", async ({ page, request }, testInfo) => {

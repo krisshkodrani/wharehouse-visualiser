@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import { resetToQuiet } from "./support/warehouse";
 
 /**
  * Cancelling an order mid-carry must give the pallet back.
@@ -43,8 +44,7 @@ test("a pallet is returned when its order is cancelled mid-carry", async ({ requ
   test.setTimeout(300_000);
   test.skip(!process.env.E2E_BASE_URL, "This scenario requires the live Docker application.");
 
-  await request.post("/api/v1/warehouses/linz/operations/reset", { data: {} });
-  await request.post("/api/v1/warehouses/linz/operations/speed", { data: { multiplier: 3 } });
+  await resetToQuiet(request, 3);
 
   const received = await request.post("/api/v1/warehouses/linz/inbound-loads", {
     data: { sku: "E2E-CANCEL-RELEASE", quantity: 1 }

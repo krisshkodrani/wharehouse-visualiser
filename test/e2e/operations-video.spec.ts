@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { resetToQuiet } from "./support/warehouse";
 
 interface LoadState {
   id: string;
@@ -44,8 +45,7 @@ test("records one complete putaway and outbound transfer", async ({ page, reques
   page.on("console", (message) => browserMessages.push(`[console:${message.type()}] ${message.text()}`));
   page.on("pageerror", (error) => browserMessages.push(`[pageerror] ${error.stack || error.message}`));
 
-  await request.post("/api/v1/warehouses/linz/operations/reset", { data: {} });
-  await request.post("/api/v1/warehouses/linz/operations/speed", { data: { multiplier: 2 } });
+  await resetToQuiet(request, 2);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("#startup-status")).toHaveCount(0);
   await expect(page.locator("canvas.warehouseCanvas")).toBeVisible();

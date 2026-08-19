@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { seedFromQuiet } from "./support/warehouse";
 
 /**
  * A pallet must stay visible while it changes hands.
@@ -33,8 +34,7 @@ test("a pallet is never lost between the shelf, the fork and the floor", async (
   // Seed a scenario rather than resetting to the chooser: the fleet then has work of its own,
   // so handovers happen without this spec having to drive one, and no in-flight order is torn
   // out from under a spec that ran before this one.
-  await request.post("/api/v1/warehouses/linz/scenario", { data: { presetId: "balanced-shift" } });
-  await request.post("/api/v1/warehouses/linz/operations/speed", { data: { multiplier: 4 } });
+  await seedFromQuiet(request, "balanced-shift", 4);
 
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("canvas.warehouseCanvas")).toBeVisible();
@@ -92,8 +92,7 @@ test("a pallet on the fork is never rebuilt in the slot it came from", async ({ 
   test.setTimeout(240_000);
   test.skip(!process.env.E2E_BASE_URL, "This scenario requires the live Docker application.");
 
-  await request.post("/api/v1/warehouses/linz/scenario", { data: { presetId: "balanced-shift" } });
-  await request.post("/api/v1/warehouses/linz/operations/speed", { data: { multiplier: 4 } });
+  await seedFromQuiet(request, "balanced-shift", 4);
 
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("canvas.warehouseCanvas")).toBeVisible();
