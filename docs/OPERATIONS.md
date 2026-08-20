@@ -76,6 +76,21 @@ Model choice is the main cost lever. `z-ai/glm-5.2` runs about $0.0003 per plann
 
 `AI_PROVIDER=openrouter` means real spend, and the endpoint is deliberately unauthenticated. Only two routes reach the model — `POST /api/v1/warehouses/linz/putaway-requests` and `POST /api/v1/warehouses/linz/transport-orders` — and nginx limits each source address to roughly six per minute. Choosing or resetting a scenario calls no model at all, so the headline demo flow is free. The account-level spending cap at OpenRouter is the only control that cannot be bypassed from outside the instance. Setting `AI_PROVIDER=mock` and restarting the backend takes spend to zero without changing anything else.
 
+### Simulator dynamics configuration
+
+Vehicle realism remains configurable without code changes. Existing defaults are preserved:
+
+- `AGV_ID=FL-01`
+- `AGV_SPEED=2.5`, `AGV_LOADED_SPEED=1.8`, `AGV_DOCKING_SPEED=0.7`
+- `AGV_ACCELERATION=1.0`, `AGV_BRAKING=1.5`
+- `AGV_BATTERY_CONSUMPTION_PER_METRE=0.015`
+- `AGV_FORK_LIFT_SPEED=0.75`, `AGV_FORK_EXTENSION_SPEED=0.55`
+- `AGV_CHARGE_PER_MINUTE=5`
+- `AGV_TELEMETRY_INTERVAL_MS=50`
+
+Changing telemetry cadence also changes fork interpolation step duration, keeping physical
+simulation and wire publication cadence consistent.
+
 ### Capacity
 
 The workload never idles: telemetry drains every 50 ms, the outbox publishes every 250 ms, the robotic cell ticks every 250 ms, and the simulator emits visualization at 20 Hz. The `small_3_0` bundle sustains 20% CPU per vCPU before burst credits drain, so the Lightsail alarm to watch is **burst capacity**, not average CPU. Memory is the other limit: `mem_limit` and `JAVA_TOOL_OPTIONS` in `compose.prod.yaml` exist because two JVMs would otherwise each claim a quarter of host RAM. Sustained pressure on either is the signal to move to `medium_3_0`, not to tune further.

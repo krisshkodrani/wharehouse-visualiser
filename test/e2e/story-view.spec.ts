@@ -85,11 +85,22 @@ test("shows every pipeline stage with exactly one current", async ({ page }) => 
 
 test("explains the architecture on demand", async ({ page }) => {
   await page.getByRole("button", { name: "How this works" }).click();
-  const dialog = page.getByRole("dialog", { name: "How this works" });
+  const dialog = page.getByRole("dialog", { name: "System design" });
   await expect(dialog).toBeVisible();
-  await expect(page.locator(".howStep")).toHaveCount(6);
+  await expect(dialog.locator(".systemNode")).toHaveCount(5);
+  await expect(dialog).toContainText("OpenUI5 control tower");
+  await expect(dialog).toContainText("Warehouse backend");
+  await expect(dialog).toContainText("PostgreSQL");
+  await expect(dialog).toContainText("MQTT broker");
+  await expect(dialog).toContainText("FL-01 simulator");
+  await expect(dialog).toContainText("ROBOT-01 + conveyors");
+  await expect(dialog).toContainText("Durable command path");
+  await expect(dialog).toContainText("Operational return path");
   await expect(dialog).toContainText("VDA 5050 v3.0.0");
   await expect(dialog).toContainText("not VDA-certified");
+  const overflows = await dialog.locator(".howItWorksContent").evaluate((element) =>
+    element.scrollWidth > element.clientWidth + 1);
+  expect(overflows, "system diagram overflows the dialog horizontally").toBe(false);
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
   await expect(dialog).toBeHidden();
 });

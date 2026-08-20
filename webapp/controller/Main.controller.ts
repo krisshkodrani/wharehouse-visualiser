@@ -7,16 +7,17 @@ import SegmentedButton from "sap/m/SegmentedButton";
 import Dialog from "sap/m/Dialog";
 import type Event from "sap/ui/base/Event";
 import WarehouseViewport from "../control/WarehouseViewport";
-import WarehouseApi from "../model/WarehouseApi";
+import WarehouseApi from "../service/WarehouseApi";
+import WarehouseEventService from "../service/WarehouseEventService";
+import TransportOrderService from "../service/TransportOrderService";
+import ScenarioService from "../service/ScenarioService";
 import type { ApiAgv, ApiTransportOrder, WarehouseEvent, WarehouseModelData, WarehouseSnapshot, WarehouseVisualConfig } from "../model/types";
 import { projectVisualConfig } from "../model/warehouseState";
 import { mergeAgvEvent } from "../model/agvState";
-import { buildOrderInspection, filterInspectionActivity } from "../model/orderInspection";
-import type { InspectionActivityFilter, OrderInspection, TaskInspection, VdaNavigatorItem, VdaSequenceRow } from "../model/orderInspection";
-import { buildNarrative } from "../model/narrative";
+import { buildNarrative, buildOrderInspection, filterInspectionActivity } from "../model/presentation";
+import type { InspectionActivityFilter, OrderInspection, TaskInspection, VdaNavigatorItem, VdaSequenceRow } from "../model/presentation";
+import { ATTENTION_ORDER_STATUSES as ATTENTION_STATUSES, presentTransportOrders, selectAttentionOrders } from "../model/selectors";
 
-/** Order statuses an operator has to act on. */
-const ATTENTION_STATUSES = ["FAILED", "REJECTED", "CANCELLED"];
 /** Rolling window used for the throughput KPI. */
 const THROUGHPUT_WINDOW_MS = 60_000;
 /** Remembers the presenter's density choice across the reload that a reset triggers. */
@@ -31,6 +32,9 @@ interface OrderRow { id: string; status: string; createdAt: string; completedAt?
 /** @namespace warehouse.visualizer.controller */
 export default class MainController extends Controller {
   private readonly api = new WarehouseApi();
+  private readonly events = new WarehouseEventService();
+  private readonly transportOrders = new TransportOrderService(this.api);
+  private readonly scenarios = new ScenarioService(this.api);
   private sceneConfigured = false;
   private sceneSignature = "";
   private initialized = false;
@@ -46,7 +50,7 @@ export default class MainController extends Controller {
   }
 
   public onExit(): void {
-    this.api.disconnect();
+    this.events.disconnect();
     if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
   }
 
@@ -96,7 +100,7 @@ export default class MainController extends Controller {
   public async onToggleOperations(): Promise<void> {
     const paused = this.model().getProperty("/operationState") === "PAUSED";
     try {
-      await this.api.operation(paused ? "resume" : "pause");
+      await this.scenarios.operation(paused ? "resume" : "pause");
       await this.loadSnapshot();
       MessageToast.show(paused ? "Warehouse operations resumed." : "Warehouse operations stopped safely.");
     } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
@@ -104,7 +108,7 @@ export default class MainController extends Controller {
 
   private async applySpeed(multiplier: 1 | 2 | 4): Promise<void> {
     try {
-      await this.api.setSpeed(multiplier);
+      await this.scenarios.setSpeed(multiplier);
       this.model().setProperty("/timeScale", multiplier);
       MessageToast.show(`Simulation speed set to ${multiplier}x.`);
     } catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
@@ -121,7 +125,7 @@ export default class MainController extends Controller {
 
   private async performReset(): Promise<void> {
     try {
-      const snapshot = await this.api.resetScenario();
+      const snapshot = await this.scenarios.reset();
       this.applySnapshot(snapshot);
       this.seedDialog()?.open();
       MessageToast.show("Scenario cleared. Choose the next warehouse story.");
@@ -136,7 +140,7 @@ export default class MainController extends Controller {
     const dialog = this.seedDialog();
     dialog?.setBusy(true);
     try {
-      const snapshot = await this.api.seedScenario(presetId);
+      const snapshot = await this.scenarios.start(presetId);
       this.applySnapshot(snapshot);
       dialog?.close();
       MessageToast.show(`${snapshot.scenario.name ?? "Scenario"} started. The first task is being dispatched.`);
@@ -166,7 +170,7 @@ export default class MainController extends Controller {
     const dialog = this.byId("transportOrderDialog") as Dialog;
     dialog.setBusy(true);
     try {
-      const order = await this.api.createTransportOrder(type, priority, loadIds, String(model.getProperty("/orderObjective") || ""));
+      const order = await this.transportOrders.create(type, priority, loadIds, String(model.getProperty("/orderObjective") || ""));
       dialog.close();
       MessageToast.show(`Transport order ${order.id.slice(0, 8)} created and queued for auto-dispatch.`);
       await this.loadSnapshot();
@@ -255,7 +259,7 @@ export default class MainController extends Controller {
   public async onCancelSelectedOrder(): Promise<void> {
     const order = this.model().getProperty("/selectedOrder") as ApiTransportOrder | null;
     if (!order || ["COMPLETED", "CANCELLED"].includes(order.status)) return;
-    try { await this.api.cancelTransportOrder(order.id); await this.loadSnapshot(); MessageToast.show("Transport order cancelled through VDA instant actions."); }
+    try { await this.transportOrders.cancel(order.id); await this.loadSnapshot(); MessageToast.show("Transport order cancelled through VDA instant actions."); }
     catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
   }
 
@@ -304,7 +308,8 @@ export default class MainController extends Controller {
     }
     (window as Window & { warehouseVisualizerReady?: () => void }).warehouseVisualizerReady?.();
     void this.loadSnapshot();
-    this.api.connect((event) => this.onWarehouseEvent(event), (status) => this.model().setProperty("/connectionStatus", status));
+    this.events.connect((event) => this.onWarehouseEvent(event),
+      (status) => this.model().setProperty("/connectionStatus", status));
   }
 
   private async loadSnapshot(): Promise<void> {
@@ -337,19 +342,12 @@ export default class MainController extends Controller {
     model.setProperty("/liveInventory", snapshot.loads);
     model.setProperty("/jobs", snapshot.jobs);
     model.setProperty("/tasks", snapshot.tasks);
-    const orders = snapshot.transportOrders.map((order) => ({
-      ...order,
-      shortId: order.id.slice(0, 8).toUpperCase(),
-      displayType: order.type === "PUTAWAY" ? "Put-away" : "Outbound",
-      completedTasks: order.tasks.filter((task) => task.status === "COMPLETED").length,
-      progress: order.tasks.length ? Math.round(order.tasks.filter((task) => task.status === "COMPLETED").length / order.tasks.length * 100) : 0,
-      assignedAgv: order.tasks.find((task) => task.assignedAgvId)?.assignedAgvId ?? "Awaiting AGV"
-    }));
+    const orders = presentTransportOrders(snapshot.transportOrders);
     model.setProperty("/allTransportOrders", orders);
     model.setProperty("/scenario", snapshot.scenario);
     model.setProperty("/activeOrderCount", orders.filter((order) => order.status === "IN_PROGRESS").length);
     model.setProperty("/queuedOrderCount", orders.filter((order) => ["PLANNING", "READY"].includes(order.status)).length);
-    model.setProperty("/attentionCount", orders.filter((order) => ATTENTION_STATUSES.includes(order.status)).length);
+    model.setProperty("/attentionCount", selectAttentionOrders(orders).length);
     this.applyOperationalKpis(orders);
     this.applyOrderFilter();
     const selectedId = (model.getProperty("/selectedOrder") as ApiTransportOrder | null)?.id;
@@ -621,7 +619,8 @@ export default class MainController extends Controller {
     const all = (model.getProperty("/allTransportOrders") as OrderRow[] | undefined) ?? [];
     const attentionOnly = model.getProperty("/orderFilter") === "ATTENTION";
     model.setProperty("/transportOrders",
-      attentionOnly ? all.filter((order) => ATTENTION_STATUSES.includes(order.status)) : all);
+      attentionOnly ? all.filter((order) =>
+        ATTENTION_STATUSES.includes(order.status as typeof ATTENTION_STATUSES[number])) : all);
   }
 
   /** Two numbers an operator can act on: how long the most patient queued order
@@ -662,7 +661,8 @@ export default class MainController extends Controller {
   /** The order worth narrating: live work first, then anything broken, then queued. */
   private mostRelevantOrder<T extends { status: string }>(orders: T[]): T | undefined {
     return orders.find((order) => order.status === "IN_PROGRESS")
-      ?? orders.find((order) => ATTENTION_STATUSES.includes(order.status))
+      ?? orders.find((order) =>
+        ATTENTION_STATUSES.includes(order.status as typeof ATTENTION_STATUSES[number]))
       ?? orders.find((order) => ["PLANNING", "READY"].includes(order.status))
       ?? orders[0];
   }

@@ -1,0 +1,15 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core" xmlns:warehouse="warehouse.visualizer.control">
+  <VBox renderType="Bare" class="mapStage">
+    <HBox class="mapOverlay" justifyContent="SpaceBetween" alignItems="Start">
+      <VBox class="floatingCard">
+        <Title text="Live warehouse" level="H3" />
+        <Text text="{= ${warehouse>/selectedOrder/shortId}
+          ? (${warehouse>/viewMode} === 'STORY' ? 'Following TO-' : 'Selected TO-') + ${warehouse>/selectedOrder/shortId}
+          : (${warehouse>/viewMode} === 'STORY' ? 'Waiting for the first transport order' : 'Select an order to inspect its route') }" />
+        <Text text="Drag to orbit · WASD to pan · scroll to zoom" class="viewportHint" />
+      </VBox>
+      <core:Fragment fragmentName="warehouse.visualizer.view.fragments.KpiOverlay" type="XML" />
+    </HBox>
+    <warehouse:WarehouseViewport id="viewport" rackSelected=".onRackSelected" class="warehouseViewport" />
+  </VBox>
+</core:FragmentDefinition>

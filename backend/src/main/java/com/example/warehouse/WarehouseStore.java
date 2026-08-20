@@ -1,5 +1,7 @@
 package com.example.warehouse;
 
+import com.example.warehouse.routing.RoutePlanner;
+import com.example.warehouse.scenario.ScenarioPreset;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.ResultSet;
@@ -14,17 +16,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 @Repository
-class WarehouseStore {
-  record NodeRow(String id, double x, double z) {}
-  record EdgeRow(String id, String from, String to, double cost, boolean bidirectional) {}
-  record PhysicalObstacle(String id, String type, double x, double z, double halfWidth, double halfDepth, double rotationY, double height) {}
-  record ParkingRow(String id, String nodeId, double x, double z, double theta) {}
-  record StationFootprint(String id, String type, double x, double z, double width, double depth) {}
-  record HandlingRow(String locationId, double x, double z, double theta, double height) {}
-  record TaskRow(UUID id, UUID transportOrderId, int sequence, String loadId, String source, String destination, String status,
+public class WarehouseStore {
+  public record NodeRow(String id, double x, double z) {}
+  public record EdgeRow(String id, String from, String to, double cost, boolean bidirectional) {}
+  public record PhysicalObstacle(String id, String type, double x, double z, double halfWidth, double halfDepth, double rotationY, double height) {}
+  public record ParkingRow(String id, String nodeId, double x, double z, double theta) {}
+  public record StationFootprint(String id, String type, double x, double z, double width, double depth) {}
+  public record HandlingRow(String locationId, double x, double z, double theta, double height) {}
+  public record TaskRow(UUID id, UUID transportOrderId, int sequence, String loadId, String source, String destination, String status,
       List<String> route, String assignedAgvId) {}
-  record OutboxRow(long id, String topic, String payload, int qos) {}
-  record DispatchPayload(long orderUpdateId, String payload) {}
+  public record OutboxRow(long id, String topic, String payload, int qos) {}
+  public record DispatchPayload(long orderUpdateId, String payload) {}
   private static final java.util.Map<String, Set<String>> TASK_TRANSITIONS = new java.util.HashMap<>();
   static {
     TASK_TRANSITIONS.put("PLANNING", Set.of("READY"));
@@ -49,7 +51,7 @@ class WarehouseStore {
     this.mapper = mapper;
   }
 
-  ApiModels.WarehouseSnapshot snapshot() {
+  public ApiModels.WarehouseSnapshot snapshot() {
     Map<String, Object> warehouse = jdbc.queryForMap("select * from warehouse where id='linz'");
     var racks = jdbc.query("select * from rack where warehouse_id='linz' order by id", (rs, n) ->
         new ApiModels.RackView(rs.getString("id"), rs.getString("name"), rs.getDouble("x"), rs.getDouble("z"), rs.getDouble("rotation_y"), rs.getInt("bays"), rs.getString("canonical_id")));
@@ -75,58 +77,58 @@ class WarehouseStore {
         orders, tasks, scenario(runtime), runtime, transfers, obstacles, cartons, robotCells, aisles());
   }
 
-  ApiModels.RuntimeView runtime() {
+  public ApiModels.RuntimeView runtime() {
     return jdbc.queryForObject("select * from warehouse_runtime where warehouse_id='linz'", (rs, n) ->
         new ApiModels.RuntimeView(rs.getString("operation_state"), rs.getLong("simulation_epoch"), rs.getInt("time_scale"),
             rs.getString("scenario_id"), rs.getBoolean("scenario_configured"), instant(rs, "changed_at")));
   }
 
-  ApiModels.AgvView agv() {
+  public ApiModels.AgvView agv() {
     return agv("FL-01");
   }
 
-  ApiModels.AgvView agv(String agvId) {
+  public ApiModels.AgvView agv(String agvId) {
     return jdbc.queryForObject("select * from agv where id=?", (rs, n) -> agvView(rs), agvId);
   }
 
-  List<String> agvIds() {
+  public List<String> agvIds() {
     return jdbc.queryForList("select id from agv where warehouse_id='linz' order by id", String.class);
   }
 
-  Optional<String> agvIdForTask(UUID taskId) {
+  public Optional<String> agvIdForTask(UUID taskId) {
     return jdbc.query("select assigned_agv_id from transport_task where id=? and assigned_agv_id is not null",
         (rs, n) -> rs.getString(1), taskId).stream().findFirst();
   }
 
-  HandlingRow handling(String locationId) {
+  public HandlingRow handling(String locationId) {
     return jdbc.queryForObject("select id,coalesce(handling_x,x) handling_x,coalesce(handling_z,z) handling_z,coalesce(handling_theta,rotation_y) handling_theta,coalesce(handling_height,0) handling_height from location where id=?",
         (rs, n) -> new HandlingRow(rs.getString("id"), rs.getDouble("handling_x"), rs.getDouble("handling_z"),
             rs.getDouble("handling_theta"), rs.getDouble("handling_height")), locationId);
   }
 
-  NodeRow locationPosition(String locationId) {
+  public NodeRow locationPosition(String locationId) {
     return jdbc.queryForObject("select map_node_id,x,z from location where id=?", (rs, n) ->
         new NodeRow(rs.getString("map_node_id"), rs.getDouble("x"), rs.getDouble("z")), locationId);
   }
 
-  NodeRow nearestNodeToAgv() {
+  public NodeRow nearestNodeToAgv() {
     return nearestNodeToAgv("FL-01");
   }
 
-  NodeRow nearestNodeToAgv(String agvId) {
+  public NodeRow nearestNodeToAgv(String agvId) {
     ApiModels.AgvView agv = agv(agvId);
     return nodes().stream().min(java.util.Comparator
         .comparingDouble((NodeRow node) -> Math.hypot(node.x() - agv.x(), node.z() - agv.z()))
         .thenComparing(NodeRow::id)).orElseThrow();
   }
 
-  boolean isRunning() { return "RUNNING".equals(runtime().operationState()); }
+  public boolean isRunning() { return "RUNNING".equals(runtime().operationState()); }
 
-  void requireRunning() {
+  public void requireRunning() {
     if (!isRunning()) throw new OperationsPausedException();
   }
 
-  List<ApiModels.IncomingLoad> incomingLoads(List<String> ids) {
+  public List<ApiModels.IncomingLoad> incomingLoads(List<String> ids) {
     if (ids.isEmpty()) return List.of();
     String placeholders = String.join(",", ids.stream().map(id -> "?").toList());
     return jdbc.query("select id,item,location_id from load where status='INBOUND' and id in (" + placeholders + ") order by id",
@@ -136,7 +138,7 @@ class WarehouseStore {
   /** Eligible storage slots, each carrying the aisle that serves it. The aisle comes
    * through the slot's rack rather than being stored on the location, so a rack can
    * be moved between aisles without rewriting every slot beneath it. */
-  List<ApiModels.CandidateSlot> candidates() {
+  public List<ApiModels.CandidateSlot> candidates() {
     return jdbc.query("select l.*, a.id as aisle_id, a.name as aisle_name from location l "
         + "left join rack r on l.rack_id = r.id left join aisle a on r.aisle_id = a.id "
         + "where l.warehouse_id='linz' and l.type='STORAGE' and l.occupied+l.reserved < l.capacity order by l.id",
@@ -145,7 +147,7 @@ class WarehouseStore {
             rs.getString("aisle_id"), rs.getString("aisle_name")));
   }
 
-  List<ApiModels.AisleView> aisles() {
+  public List<ApiModels.AisleView> aisles() {
     return jdbc.query("select id,name,x,z,rotation_y,length,width from aisle where warehouse_id='linz' order by id",
         (rs, n) -> new ApiModels.AisleView(rs.getString("id"), rs.getString("name"), rs.getDouble("x"),
             rs.getDouble("z"), rs.getDouble("rotation_y"), rs.getDouble("length"), rs.getDouble("width")));
@@ -155,24 +157,24 @@ class WarehouseStore {
     createRequest(id, type, "NORMAL", prompt, runtime().scenarioId(), loadIds);
   }
 
-  void createRequest(UUID id, String type, String priority, String objective, String scenarioId, List<String> loadIds) {
+  public void createRequest(UUID id, String type, String priority, String objective, String scenarioId, List<String> loadIds) {
     jdbc.update("insert into transport_order(id,status,objective,order_type,priority,scenario_id) values (?,?,?,?,?,?)",
         id, "PLANNING", objective, type, priority, scenarioId);
     for (int index = 0; index < loadIds.size(); index++)
       jdbc.update("insert into transport_order_load(request_id,load_id,sequence_no) values (?,?,?)", id, loadIds.get(index), index + 1);
   }
 
-  ApiModels.PutawayStatus request(UUID id) {
+  public ApiModels.PutawayStatus request(UUID id) {
     return jdbc.queryForObject("select * from transport_order where id=?", (rs, n) ->
         new ApiModels.PutawayStatus(id, rs.getString("status"), rs.getString("objective"), rs.getString("error"),
             rs.getTimestamp("created_at").toInstant(), jobsForRequest(id)), id);
   }
 
-  void rejectRequest(UUID id, String error) {
+  public void rejectRequest(UUID id, String error) {
     jdbc.update("update transport_order set status='FAILED', error=?,completed_at=now(),updated_at=now() where id=?", error, id);
   }
 
-  void createPlannedJobs(UUID requestId, List<ApiModels.IncomingLoad> loads, ApiModels.PlacementPlan plan, RoutePlanner routes) {
+  public void createPlannedJobs(UUID requestId, List<ApiModels.IncomingLoad> loads, ApiModels.PlacementPlan plan, RoutePlanner routes) {
     for (int index = 0; index < plan.placements().size(); index++) {
       ApiModels.Placement placement = plan.placements().get(index);
       ApiModels.IncomingLoad load = loads.stream().filter(item -> item.id().equals(placement.loadId())).findFirst().orElseThrow();
@@ -186,7 +188,7 @@ class WarehouseStore {
     jdbc.update("update transport_order set status='READY',updated_at=now() where id=?", requestId);
   }
 
-  List<ApiModels.LoadView> receive(String sku, int quantity) {
+  public List<ApiModels.LoadView> receive(String sku, int quantity) {
     requireRunning();
     Integer free = jdbc.queryForObject("select capacity-occupied-reserved from location where id='INBOUND-01' for update", Integer.class);
     if (free == null || free < quantity) throw new IllegalStateException("Inbound staging does not have enough free positions");
@@ -202,11 +204,11 @@ class WarehouseStore {
     return result;
   }
 
-  UUID createOutbound(List<String> loadIds, RoutePlanner routes) {
+  public UUID createOutbound(List<String> loadIds, RoutePlanner routes) {
     return createOutbound(loadIds, "NORMAL", "Operator outbound shipment", runtime().scenarioId(), routes);
   }
 
-  UUID createOutbound(List<String> loadIds, String priority, String objective, String scenarioId, RoutePlanner routes) {
+  public UUID createOutbound(List<String> loadIds, String priority, String objective, String scenarioId, RoutePlanner routes) {
     requireRunning();
     List<String> distinct = loadIds.stream().distinct().toList();
     if (distinct.size() != loadIds.size()) throw new IllegalArgumentException("Each outbound box may only be selected once");
@@ -231,13 +233,10 @@ class WarehouseStore {
   }
 
   List<ApiModels.ScenarioPreset> scenarioPresets() {
-    return List.of(
-        new ApiModels.ScenarioPreset("balanced-shift", "Balanced shift", "Inbound and outbound work sharing one vehicle.", 32, 4, "MIXED", 4, "NORMAL", 82),
-        new ApiModels.ScenarioPreset("inbound-surge", "Inbound surge", "Clear a busy staging lane with auto-planned put-away.", 24, 12, "PUTAWAY", 6, "HIGH", 78),
-        new ApiModels.ScenarioPreset("outbound-wave", "Outbound wave", "Fulfil a priority shipment from storage to outbound.", 40, 0, "OUTBOUND", 6, "URGENT", 90));
+    return ScenarioPreset.all();
   }
 
-  ApiModels.WarehouseSnapshot seedScenario(String presetId, RoutePlanner routes) {
+  public ApiModels.WarehouseSnapshot seedScenario(String presetId, RoutePlanner routes) {
     ApiModels.ScenarioPreset preset = scenarioPresets().stream().filter(item -> item.id().equals(presetId)).findFirst()
         .orElseThrow(() -> new IllegalArgumentException("Unknown scenario preset: " + presetId));
     reset();
@@ -292,12 +291,12 @@ class WarehouseStore {
     return orderId;
   }
 
-  List<ApiModels.TransportOrderView> transportOrders() {
+  public List<ApiModels.TransportOrderView> transportOrders() {
     return jdbc.query("select * from transport_order order by case status when 'IN_PROGRESS' then 0 when 'READY' then 1 when 'PLANNING' then 2 else 3 end,case priority when 'URGENT' then 0 when 'HIGH' then 1 else 2 end,created_at desc",
         (rs, n) -> transportOrder(rs));
   }
 
-  Optional<ApiModels.TransportOrderView> transportOrder(UUID id) {
+  public Optional<ApiModels.TransportOrderView> transportOrder(UUID id) {
     return jdbc.query("select * from transport_order where id=?", (rs, n) -> transportOrder(rs), id).stream().findFirst();
   }
 
@@ -334,20 +333,20 @@ class WarehouseStore {
     recordDispatch(taskId, agvId, orderId, updateId, payload);
   }
 
-  void recordDispatch(UUID taskId, String agvId, String orderId, long updateId, String payload) {
+  public void recordDispatch(UUID taskId, String agvId, String orderId, long updateId, String payload) {
     jdbc.update("insert into vda_dispatch(id,task_id,manufacturer,serial_number,order_id,order_update_id,status,payload_json,published_at) values (?,?,?,?,?,?, 'PUBLISHED',?,now())",
         UUID.randomUUID(), taskId, "demo", agvId, orderId, updateId, payload);
   }
 
-  Optional<DispatchPayload> latestDispatch(UUID taskId) {
+  public Optional<DispatchPayload> latestDispatch(UUID taskId) {
     return jdbc.query("select order_update_id,payload_json from vda_dispatch where task_id=? order by order_update_id desc limit 1",
         (rs, n) -> new DispatchPayload(rs.getLong(1), rs.getString(2)), taskId).stream().findFirst();
   }
 
-  void enqueueOrderUpdate(UUID taskId, String orderId, long updateId, String payload) {
+  public void enqueueOrderUpdate(UUID taskId, String orderId, long updateId, String payload) {
     String agvId = jdbc.queryForObject("select coalesce(assigned_agv_id,'FL-01') from transport_task where id=?", String.class, taskId);
     recordDispatch(taskId, agvId, orderId, updateId, payload);
-    jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", com.example.warehouse.vda.Vda5050.topicPrefix(agvId) + "/order", payload);
+    jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", com.example.warehouse.mqtt.TopicFactory.order(agvId), payload);
   }
 
   void appendExecutionEvent(UUID taskId, String eventType, String description, String correlationId, String vdaOrderId, long orderUpdateId) {
@@ -380,7 +379,7 @@ class WarehouseStore {
     }
   }
 
-  void acceptDispatch(UUID taskId) {
+  public void acceptDispatch(UUID taskId) {
     if (safeTransitionTaskStatus(taskId, "ACCEPTED")) {
       jdbc.update("update transport_task set accepted_at=coalesce(accepted_at,now()) where id=?", taskId);
       appendExecutionEvent(taskId, "TASK_ACCEPTED", "Task accepted by AGV", null, null, 0);
@@ -388,11 +387,11 @@ class WarehouseStore {
     jdbc.update("update vda_dispatch set status='ACCEPTED',accepted_at=coalesce(accepted_at,now()) where task_id=? and status='PUBLISHED'", taskId);
   }
 
-  void finishDispatch(UUID taskId) {
+  public void finishDispatch(UUID taskId) {
     jdbc.update("update vda_dispatch set status='FINISHED',finished_at=coalesce(finished_at,now()) where task_id=? and status in ('PUBLISHED','ACCEPTED','ACTIVE')", taskId);
   }
 
-  ApiModels.TransportOrderView cancelOrder(UUID orderId) {
+  public ApiModels.TransportOrderView cancelOrder(UUID orderId) {
     List<TaskRow> queued = jdbc.query("select * from transport_task where request_id=? and status in ('QUEUED','ASSIGNED','DISPATCHED','ACCEPTED','EXECUTING') order by sequence_no", (rs, n) -> task(rs), orderId);
     queued.forEach(task -> {
       if (!"COMPLETED".equals(task.status()) && !"CANCELLED".equals(task.status())) {
@@ -420,7 +419,7 @@ class WarehouseStore {
    * <p>Deliberately grace-delayed rather than immediate: handling telemetry is
    * latest-value-wins, so releasing while the fork is still reporting the load would let
    * updateHandling write it straight back onto the vehicle. */
-  List<TaskRow> tasksAwaitingCancellation(int graceSeconds) {
+  public List<TaskRow> tasksAwaitingCancellation(int graceSeconds) {
     return jdbc.query("select t.* from transport_task t join transport_order o on o.id=t.request_id "
         + "where o.status='CANCELLED' and t.status in ('DISPATCHED','ACCEPTED','EXECUTING') "
         + "and t.updated_at < now() - make_interval(secs => ?)",
@@ -430,7 +429,7 @@ class WarehouseStore {
   /** Tasks handed to a vehicle that never started them. A task in DISPATCHED with no
    * started_at has been published to the broker and forgotten: nothing retries it and
    * nothing times it out, so it is invisible until someone notices the pallet never moved. */
-  List<TaskRow> tasksStalledInDispatch(int graceSeconds) {
+  public List<TaskRow> tasksStalledInDispatch(int graceSeconds) {
     return jdbc.query("select * from transport_task where status='DISPATCHED' and started_at is null "
         + "and updated_at < now() - make_interval(secs => ?)", (rs, n) -> task(rs), graceSeconds);
   }
@@ -446,7 +445,7 @@ class WarehouseStore {
    *
    * <p>The margin covers the vehicle's own envelope, so the arm is held while the forks
    * are inside even though the vehicle origin is not. */
-  boolean guardedCellOccupied(String cellId) {
+  public boolean guardedCellOccupied(String cellId) {
     Integer occupants = jdbc.queryForObject(
         "select count(*) from agv a, location c where c.id=? and c.operating_width is not null "
         + "and a.x between c.x - c.operating_width/2 - ? and c.x + c.operating_width/2 + ? "
@@ -460,7 +459,7 @@ class WarehouseStore {
    * renderer parents carried cargo at. */
   private static final double VEHICLE_REACH_MARGIN = 1.8;
 
-  void completeCancellation(UUID taskId) {
+  public void completeCancellation(UUID taskId) {
     job(taskId).ifPresent(task -> {
       releaseCancelledTask(task);
       releaseTaskZone(taskId);
@@ -494,7 +493,7 @@ class WarehouseStore {
    * the whole dispatch pass: every OUTBOUND task shares the OUTBOUND-01
    * destination zone, so returning only the head of the queue let one blocked
    * outbound task starve unrelated put-away work while the vehicle sat idle. */
-  List<TaskRow> queuedJobs(int limit) {
+  public List<TaskRow> queuedJobs(int limit) {
     if (!isRunning()) return List.of();
     return jdbc.query("select t.* from transport_task t join transport_order o on o.id=t.request_id join warehouse_runtime r on r.warehouse_id='linz' "
         + "where t.status='QUEUED' and t.simulation_epoch=r.simulation_epoch and r.operation_state='RUNNING' "
@@ -513,7 +512,7 @@ class WarehouseStore {
    * move, which is what a fleet manager should do. */
   private static final String CLAIMABLE_STATUSES = "'IDLE','PARKED','CHARGING','PARKING'";
 
-  Optional<String> claimableAgvId() {
+  public Optional<String> claimableAgvId() {
     return jdbc.query("select id from agv where status in (" + CLAIMABLE_STATUSES
         + ") and battery>=25 and task_id is null order by case id when 'FL-01' then 0 else 1 end,id limit 1",
         (rs, n) -> rs.getString(1)).stream().findFirst();
@@ -523,7 +522,7 @@ class WarehouseStore {
    * binding the parking lifecycle to agv() is deliberate rather than an omission.
    * Adding a second vehicle requires threading agvId through here,
    * {@link #enqueueParking} and DispatchService.parkIfIdle together. */
-  List<ParkingRow> parkingTargets() {
+  public List<ParkingRow> parkingTargets() {
     if (!isRunning()) return List.of();
     ApiModels.AgvView agv = agv();
     if (!"IDLE".equals(agv.status())) return List.of();
@@ -542,13 +541,13 @@ class WarehouseStore {
    * 5,704 rejections in three hours on the reference stack, each one logged at WARN and
    * published as AGV_MESSAGE_REJECTED, so the operator view showed a protocol failure
    * every time the vehicle drove to a charger. */
-  boolean isHousekeepingOrder(String orderId) {
+  public boolean isHousekeepingOrder(String orderId) {
     Integer known = jdbc.queryForObject(
         "select count(*) from vda_dispatch where order_id=? and task_id is null", Integer.class, orderId);
     return known != null && known > 0;
   }
 
-  boolean enqueueParking(String parkingId, String orderId, String orderJson) {
+  public boolean enqueueParking(String parkingId, String orderId, String orderJson) {
     int reserved = jdbc.update("update location set reserved=reserved+1 where id=? and type='PARKING_CHARGING' and occupied+reserved<capacity", parkingId);
     if (reserved != 1) return false;
     int claimed = jdbc.update("update agv set status='PARKING',task_id=null,current_station_id=?,charging=false where id='FL-01' and status='IDLE' and not exists (select 1 from transport_task where status in ('DISPATCHED','ACCEPTED','EXECUTING'))", parkingId);
@@ -560,30 +559,30 @@ class WarehouseStore {
     // A park move used to leave no trace at all, which is why its state messages could not
     // be told apart from a genuinely unknown order.
     recordDispatch(null, "FL-01", orderId, 0, orderJson);
-    jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", "vda5050/v3/demo/FL-01/order", orderJson);
+    jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", com.example.warehouse.mqtt.TopicFactory.order("FL-01"), orderJson);
     return true;
   }
 
-  Optional<TaskRow> job(UUID id) {
+  public Optional<TaskRow> job(UUID id) {
     return jdbc.query("select * from transport_task where id=?", (rs, n) -> task(rs), id).stream().findFirst();
   }
 
-  Optional<TaskRow> activeTaskForOrder(UUID orderId) {
+  public Optional<TaskRow> activeTaskForOrder(UUID orderId) {
     return jdbc.query("select * from transport_task where request_id=? and status in ('DISPATCHED','ACCEPTED','EXECUTING') order by sequence_no limit 1",
         (rs, n) -> task(rs), orderId).stream().findFirst();
   }
 
-  void markDispatched(UUID jobId, String agvId, String orderJson) {
+  public void markDispatched(UUID jobId, String agvId, String orderJson) {
     releaseStation(agvId);
     if (!safeTransitionTaskStatus(jobId, "DISPATCHED")) return;
     jdbc.update("update transport_task set assigned_agv_id=?,updated_at=now() where id=?", agvId, jobId);
     appendExecutionEvent(jobId, "TASK_DISPATCHED", "Task dispatched to AGV", null, null, 0);
     jdbc.update("update transport_order set status='IN_PROGRESS',updated_at=now() where id=(select request_id from transport_task where id=?)", jobId);
     jdbc.update("update agv set status='DISPATCHED',task_id=?,charging=false,current_station_id=null,handling_phase='IDLE' where id=?", jobId, agvId);
-    jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", com.example.warehouse.vda.Vda5050.topicPrefix(agvId) + "/order", orderJson);
+    jdbc.update("insert into mqtt_outbox(topic,payload,qos) values (?,?,1)", com.example.warehouse.mqtt.TopicFactory.order(agvId), orderJson);
   }
 
-  boolean reserveTaskZone(UUID taskId, String agvId, String destination) {
+  public boolean reserveTaskZone(UUID taskId, String agvId, String destination) {
     String zoneId = "STATION-" + canonicalLocation(destination);
     int claimed = jdbc.update("insert into zone_reservation(id,zone_id,agv_id,task_id,status) values (?,?,?,?, 'ACTIVE') on conflict (zone_id) where status='ACTIVE' do nothing",
         UUID.randomUUID(), zoneId, agvId, taskId);
@@ -600,7 +599,7 @@ class WarehouseStore {
       jdbc.update("update location set occupied=greatest(0,occupied-1),reserved=greatest(0,reserved-1) where id=? and type='PARKING_CHARGING'", stationId);
   }
 
-  void markPicked(UUID jobId, String agvId) {
+  public void markPicked(UUID jobId, String agvId) {
     safeTransitionTaskStatus(jobId, "EXECUTING");
     jdbc.update("update transport_task set started_at=coalesce(started_at,now()),updated_at=now() where id=? and status in ('DISPATCHED','ACCEPTED','EXECUTING')", jobId);
     int updated = jdbc.update("update load set status='IN_TRANSIT' where id=(select load_id from transport_task where id=?) and status in ('INBOUND','STORED','OUTBOUND_QUEUED')", jobId);
@@ -608,7 +607,7 @@ class WarehouseStore {
     jdbc.update("update agv set carried_load_id=(select load_id from transport_task where id=?) where id=?", jobId, agvId);
   }
 
-  void markExecuting(UUID jobId, String agvId) {
+  public void markExecuting(UUID jobId, String agvId) {
     boolean transitioned = safeTransitionTaskStatus(jobId, "EXECUTING");
     if (transitioned) {
       jdbc.update("update transport_task set started_at=coalesce(started_at,now()),updated_at=now() where id=?", jobId);
@@ -629,23 +628,23 @@ class WarehouseStore {
    * whenever the cache lagged a dispatch the vehicle kept whatever status it had
    * before, so it sat reading PARKED while visibly driving across the floor. Pose
    * and status both always land; the jobId argument is deliberately unused. */
-  void updateAgvMotion(String agvId, double x, double z, double theta, double velocity, String status, UUID jobId) {
+  public void updateAgvMotion(String agvId, double x, double z, double theta, double velocity, String status, UUID jobId) {
     jdbc.update("update agv set x=?,z=?,theta=?,velocity=?,status=? where id=?", x, z, theta, velocity, status, agvId);
   }
 
-  void updatePower(String agvId, double battery, boolean charging) {
+  public void updatePower(String agvId, double battery, boolean charging) {
     jdbc.update("update agv set battery=?,charging=?,status=case when ? then 'CHARGING' when status='CHARGING' then 'PARKED' else status end where id=?",
         battery, charging, charging, agvId);
   }
 
-  void updateHandling(String agvId, String phase, double forkHeight, double forkExtension, String loadId, String stationId) {
+  public void updateHandling(String agvId, String phase, double forkHeight, double forkExtension, String loadId, String stationId) {
     jdbc.update("update agv set handling_phase=?,fork_height=?,fork_extension=?,carried_load_id=?,current_station_id=coalesce(?,current_station_id),charging=(?='CHARGING'),status=case when ?='CHARGING' then 'CHARGING' when ?='PARKED' then 'PARKED' when ?='DOCKING' then 'DOCKING' else status end where id=?",
         phase, forkHeight, forkExtension, loadId, stationId, phase, phase, phase, phase, agvId);
     if (stationId != null && "CHARGING".equals(phase))
       jdbc.update("update location set reserved=0,occupied=1 where id=? and type='PARKING_CHARGING'", stationId);
   }
 
-  void complete(TaskRow job) {
+  public void complete(TaskRow job) {
     boolean transitioned = safeTransitionTaskStatus(job.id(), "COMPLETED");
     if (!transitioned) return;
     jdbc.update("update transport_task set completed_at=now(),updated_at=now() where id=?", job.id());
@@ -676,7 +675,7 @@ class WarehouseStore {
     }
   }
 
-  List<String> completeDueTransfers() {
+  public List<String> completeDueTransfers() {
     var due = jdbc.query("select load_id,carton_id from conveyor_transfer where status='MOVING' and exit_due_at<=now()", (rs, n) ->
         Map.entry(rs.getString("load_id"), rs.getString("carton_id")));
     for (var transfer : due) {
@@ -699,7 +698,7 @@ class WarehouseStore {
     return due.stream().map(Map.Entry::getKey).distinct().toList();
   }
 
-  Optional<Map<String, Object>> nextRobotPick() {
+  public Optional<Map<String, Object>> nextRobotPick() {
     return jdbc.query("select id,transport_task_id,carton_id,robot_id,status,coalesce(started_at,created_at) as phase_at "
         + "from robot_pick_job where status in ('QUEUED','AT_HANDOFF','PICKING','PLACING') "
         + "order by case when status='QUEUED' then 1 else 0 end,created_at,id limit 1",
@@ -707,12 +706,12 @@ class WarehouseStore {
             "cartonId", rs.getString("carton_id"), "robotId", rs.getString("robot_id"), "status", rs.getString("status"), "createdAt", instant(rs, "phase_at"))).stream().findFirst();
   }
 
-  boolean robotCellAvailable() {
+  public boolean robotCellAvailable() {
     Integer active = jdbc.queryForObject("select count(*) from robot_cell_state where phase <> 'IDLE'", Integer.class);
     return active == null || active == 0;
   }
 
-  void robotPhase(UUID pickId, String phase) {
+  public void robotPhase(UUID pickId, String phase) {
     jdbc.update("update robot_pick_job set status=?,started_at=now() where id=?", phase, pickId);
     jdbc.update("update robot_cell_state set phase=?,active_pick_job_id=?,updated_at=now() where robot_id='ROBOT-01'", phase, pickId);
     String cartonStatus = switch (phase) {
@@ -723,7 +722,7 @@ class WarehouseStore {
     jdbc.update("update carton set status=? where id=(select carton_id from robot_pick_job where id=?)", cartonStatus, pickId);
   }
 
-  void completeRobotPick(UUID pickId, UUID taskId, String cartonId) {
+  public void completeRobotPick(UUID pickId, UUID taskId, String cartonId) {
     String conveyorId = jdbc.queryForObject("select case when (select count(*) from conveyor_transfer where status='MOVING' and conveyor_id='CONV-OUT-01') <= "
         + "(select count(*) from conveyor_transfer where status='MOVING' and conveyor_id='CONV-OUT-02') then 'CONV-OUT-01' else 'CONV-OUT-02' end", String.class);
     String loadId = jdbc.queryForObject("select pallet_id from carton where id=?", String.class, cartonId);
@@ -744,19 +743,19 @@ class WarehouseStore {
     return true;
   }
 
-  ApiModels.RuntimeView setRuntime(String state) {
+  public ApiModels.RuntimeView setRuntime(String state) {
     jdbc.update("update warehouse_runtime set operation_state=?,changed_at=now() where warehouse_id='linz'", state);
     jdbc.update("update agv set status=case when ?='PAUSED' then 'PAUSED' when task_id is null then 'IDLE' else 'MOVING' end", state);
     return runtime();
   }
 
-  ApiModels.RuntimeView setTimeScale(int multiplier) {
+  public ApiModels.RuntimeView setTimeScale(int multiplier) {
     if (multiplier != 1 && multiplier != 2 && multiplier != 4) throw new IllegalArgumentException("Simulation speed must be 1x, 2x, or 4x");
     jdbc.update("update warehouse_runtime set time_scale=?,changed_at=now() where warehouse_id='linz'", multiplier);
     return runtime();
   }
 
-  ApiModels.RuntimeView reset() {
+  public ApiModels.RuntimeView reset() {
     jdbc.update("delete from api_idempotency_key");
     jdbc.update("delete from mqtt_outbox");
     jdbc.update("delete from vda_dispatch");
@@ -784,16 +783,16 @@ class WarehouseStore {
     return jdbc.query("select * from transport_task where request_id=? order by sequence_no", (rs, n) -> legacyJobView(task(rs)), requestId);
   }
 
-  List<NodeRow> nodes() {
+  public List<NodeRow> nodes() {
     return jdbc.query("select * from map_node where warehouse_id='linz'", (rs, n) -> new NodeRow(rs.getString("id"), rs.getDouble("x"), rs.getDouble("z")));
   }
 
-  List<EdgeRow> edges() {
+  public List<EdgeRow> edges() {
     return jdbc.query("select * from map_edge where warehouse_id='linz'", (rs, n) ->
         new EdgeRow(rs.getString("id"), rs.getString("from_node"), rs.getString("to_node"), rs.getDouble("cost"), rs.getBoolean("bidirectional")));
   }
 
-  List<PhysicalObstacle> physicalObstacles() {
+  public List<PhysicalObstacle> physicalObstacles() {
     var obstacles = new java.util.ArrayList<PhysicalObstacle>();
     obstacles.addAll(jdbc.query("select id,x,z,rotation_y,bays from rack where warehouse_id='linz'", (rs, n) ->
         new PhysicalObstacle(rs.getString("id"), "SHELF", rs.getDouble("x"), rs.getDouble("z"),
@@ -807,14 +806,14 @@ class WarehouseStore {
   /** Operating footprints of every non-storage station, for layout validation and
    * rendering. Rows without an explicit footprint fall back to the renderer's
    * default so validation sees the same rectangle the operator sees. */
-  List<StationFootprint> stationFootprints() {
+  public List<StationFootprint> stationFootprints() {
     return jdbc.query("select id,type,x,z,coalesce(operating_width,7) w,coalesce(operating_depth,7) d "
         + "from location where warehouse_id='linz' and type<>'STORAGE' order by id",
         (rs, n) -> new StationFootprint(rs.getString("id"), rs.getString("type"),
             rs.getDouble("x"), rs.getDouble("z"), rs.getDouble("w"), rs.getDouble("d")));
   }
 
-  ApiModels.PlanningMap planningMap() {
+  public ApiModels.PlanningMap planningMap() {
     double tileSize = 1;
     double originX = -24;
     double originZ = -18;
@@ -853,17 +852,17 @@ class WarehouseStore {
     return Math.abs(localX) <= obstacle.halfWidth() + tileProjection && Math.abs(localZ) <= obstacle.halfDepth() + tileProjection;
   }
 
-  String nodeForLocation(String locationId) {
+  public String nodeForLocation(String locationId) {
     return jdbc.queryForObject("select map_node_id from location where id=?", String.class, locationId);
   }
 
-  List<OutboxRow> pendingOutbox() {
+  public List<OutboxRow> pendingOutbox() {
     return jdbc.query("select * from mqtt_outbox where status='PENDING' order by id limit 20", (rs, n) ->
         new OutboxRow(rs.getLong("id"), rs.getString("topic"), rs.getString("payload"), rs.getInt("qos")));
   }
 
-  void sent(long id) { jdbc.update("update mqtt_outbox set status='SENT',attempts=attempts+1 where id=?", id); }
-  void failed(long id) { jdbc.update("update mqtt_outbox set attempts=attempts+1 where id=?", id); }
+  public void sent(long id) { jdbc.update("update mqtt_outbox set status='SENT',attempts=attempts+1 where id=?", id); }
+  public void failed(long id) { jdbc.update("update mqtt_outbox set attempts=attempts+1 where id=?", id); }
 
   private ApiModels.LocationView location(ResultSet rs) throws SQLException {
     return new ApiModels.LocationView(rs.getString("id"), rs.getString("name"), rs.getString("type"), rs.getInt("capacity"),

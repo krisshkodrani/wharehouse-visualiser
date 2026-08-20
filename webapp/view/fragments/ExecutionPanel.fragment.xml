@@ -1,0 +1,12 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <VBox width="27rem" renderType="Bare" class="orderDetail executionPanel" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
+    <core:Fragment fragmentName="warehouse.visualizer.view.fragments.execution.OrderSummary" type="XML" />
+    <ScrollContainer vertical="true" horizontal="false" height="100%" class="executionScroll">
+      <VBox class="executionContent">
+        <core:Fragment fragmentName="warehouse.visualizer.view.fragments.execution.TaskJourney" type="XML" />
+        <core:Fragment fragmentName="warehouse.visualizer.view.fragments.execution.ProtocolHealth" type="XML" />
+        <core:Fragment fragmentName="warehouse.visualizer.view.fragments.execution.ActivityFeed" type="XML" />
+      </VBox>
+    </ScrollContainer>
+  </VBox>
+</core:FragmentDefinition>

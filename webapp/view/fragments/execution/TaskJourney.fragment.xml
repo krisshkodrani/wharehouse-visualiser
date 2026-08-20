@@ -1,0 +1,36 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <VBox class="intentCard">
+    <Text text="BUSINESS INTENT" class="sectionEyebrow" />
+    <Text text="{= ${warehouse>/selectedOrder/objective} || 'Select a transport order to inspect execution.' }" class="intentText" />
+  </VBox>
+  <HBox justifyContent="SpaceBetween" alignItems="Center" class="sectionHeading">
+    <VBox><Title text="Execution journey" level="H3" /><Text text="One load movement per task" /></VBox>
+    <ObjectNumber number="{= ${warehouse>/inspection/tasks}.length }" unit="tasks" />
+  </HBox>
+  <List items="{warehouse>/inspection/tasks}" itemPress=".onTaskPress" noDataText="No tasks generated yet" showSeparators="None" class="taskJourney">
+    <CustomListItem type="Active" selected="{warehouse>selected}">
+      <VBox class="taskJourneyItem">
+        <HBox justifyContent="SpaceBetween" alignItems="Start">
+          <HBox alignItems="Start" class="taskIdentity">
+            <Avatar displayShape="Circle" displaySize="XS" initials="{warehouse>sequence}" backgroundColor="Accent6" />
+            <VBox><Text text="{warehouse>label}" class="taskLabel" /><Title text="{warehouse>loadId}" level="H4" /><Text text="{warehouse>routeLabel}" /></VBox>
+          </HBox>
+          <ObjectStatus text="{warehouse>status}" state="{warehouse>statusState}" inverted="true" />
+        </HBox>
+        <HBox justifyContent="SpaceBetween" alignItems="Center" class="taskMeta">
+          <HBox alignItems="Center" class="taskVehicle"><core:Icon src="sap-icon://shipping-status" /><Text text="{warehouse>vehicleLabel}" /></HBox>
+          <Button text="{= ${warehouse>updateCount} + ' VDA update' + (${warehouse>updateCount} === 1 ? '' : 's') }" icon="sap-icon://source-code"
+            type="Transparent" press=".onInspectTaskVda" enabled="{= ${warehouse>updateCount} > 0 }" />
+        </HBox>
+        <VBox visible="{warehouse>selected}" class="taskExpanded">
+          <Label text="Planned route" /><Text text="{warehouse>routeText}" wrapping="true" />
+          <HBox wrap="Wrap" class="taskTimes">
+            <ObjectStatus title="Accepted" text="{warehouse>acceptedLabel}" icon="sap-icon://accept" />
+            <ObjectStatus title="Started" text="{warehouse>startedLabel}" icon="sap-icon://process" />
+            <ObjectStatus title="Completed" text="{warehouse>completedLabel}" icon="sap-icon://complete" />
+          </HBox>
+        </VBox>
+      </VBox>
+    </CustomListItem>
+  </List>
+</core:FragmentDefinition>

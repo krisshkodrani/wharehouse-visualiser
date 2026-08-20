@@ -24,9 +24,10 @@ interface Snapshot {
   loads: LoadState[];
   jobs: JobState[];
   agvs: Array<{ id: string }>;
-  cartons: Array<{ palletId: string; status: string }>;
+  cartons: Array<{ id: string; palletId: string; status: string }>;
   locations: Location[];
   conveyorTransfers: Array<{ loadId?: string; cartonId?: string; conveyorId?: string; status: string }>;
+  obstacles: Array<{ id: string }>;
 }
 
 interface AnimationTelemetry {
@@ -65,6 +66,12 @@ test("records one complete putaway and outbound transfer", async ({ page, reques
   // The reference fleet is single-vehicle by design (V20). Companion vehicles were
   // claimable for tasks but could never dock, so they drained and never recharged.
   expect(receivedSnapshot.agvs.map((vehicle) => vehicle.id)).toEqual(["FL-01"]);
+
+  // V21 moved receiving staging but accidentally left the V5 guard rails around
+  // its old footprint. Both crossed the valid handling envelope and rendered
+  // through the forklift at the receiving stop.
+  expect(receivedSnapshot.obstacles.map((obstacle) => obstacle.id)).not.toContain("REC-GUARD-W");
+  expect(receivedSnapshot.obstacles.map((obstacle) => obstacle.id)).not.toContain("REC-GUARD-N");
 
   // No two station footprints may intersect. Three generations of outbound layout
   // used to sit on top of each other: the dock overlapped staging by 2.5 m, the
@@ -119,6 +126,38 @@ test("records one complete putaway and outbound transfer", async ({ page, reques
   }, { timeout: 90_000, intervals: [500] }).toBe("STORED");
   await page.waitForTimeout(1800);
 
+  // Sample the scene throughout the robot cycle. A snapshot used to create the
+  // destination carton while the source visual was still attached to the gripper,
+  // leaving the same carton both in the air and on the floor/conveyor.
+  await page.evaluate(() => {
+    const control = (window as unknown as {
+      sap: { ui: { getCore(): { byId(id: string): { sceneController?: Record<string, never> } | undefined } } }
+    }).sap.ui.getCore().byId("container-warehouseVisualizer---main--viewport");
+    const controller = control?.sceneController as unknown as {
+      scene: { meshes: Array<{ metadata?: { cartonId?: string; owner?: string } }> };
+    };
+    const probe = { duplicates: [] as string[], owners: [] as string[], sawHandoff: false, sawGripper: false, sawConveyor: false };
+    (window as unknown as { __robotCartonProbe: unknown }).__robotCartonProbe = probe;
+    window.setInterval(() => {
+      const byCarton = new Map<string, string[]>();
+      for (const mesh of controller.scene.meshes) {
+        const cartonId = mesh.metadata?.cartonId;
+        const owner = mesh.metadata?.owner;
+        if (!cartonId || !owner) continue;
+        byCarton.set(cartonId, [...(byCarton.get(cartonId) ?? []), owner]);
+        probe.sawHandoff ||= owner === "HANDOFF";
+        probe.sawGripper ||= owner === "GRIPPER";
+        probe.sawConveyor ||= owner === "CONVEYOR";
+      }
+      for (const [cartonId, owners] of byCarton) {
+        const uniqueOwners = [...new Set(owners)];
+        if (uniqueOwners.length > 1 && !probe.duplicates.includes(cartonId)) probe.duplicates.push(cartonId);
+        const sample = `${cartonId}:${uniqueOwners.join("+")}`;
+        if (!probe.owners.includes(sample)) probe.owners.push(sample);
+      }
+    }, 50);
+  });
+
   const outbound = await request.post("/api/v1/warehouses/linz/outbound-requests", {
     data: { loadIds: [loadId] }
   });
@@ -166,6 +205,14 @@ test("records one complete putaway and outbound transfer", async ({ page, reques
   expect(phases).toContain("PLACING");
   // Nothing may be asked of the arm that it cannot physically reach.
   expect(animationTelemetry.filter((entry) => entry.event === "ROBOT_TARGET_OUT_OF_REACH")).toEqual([]);
+
+  const cartonProbe = await page.evaluate(() => (window as unknown as {
+    __robotCartonProbe: { duplicates: string[]; owners: string[]; sawHandoff: boolean; sawGripper: boolean; sawConveyor: boolean };
+  }).__robotCartonProbe);
+  expect(cartonProbe.sawHandoff, cartonProbe.owners.join(", ")).toBe(true);
+  expect(cartonProbe.sawGripper, cartonProbe.owners.join(", ")).toBe(true);
+  expect(cartonProbe.sawConveyor, cartonProbe.owners.join(", ")).toBe(true);
+  expect(cartonProbe.duplicates, `cartons rendered by multiple owners: ${cartonProbe.owners.join(", ")}`).toEqual([]);
 
   // Cartons must be drawn on the lane the WCS actually assigned, and must travel
   // westwards (decreasing x) towards the dock.

@@ -1,0 +1,23 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <Dialog id="transportOrderDialog" title="New transport order" contentWidth="36rem" stretchOnPhone="true">
+    <VBox class="dialogForm">
+      <Label text="Order type" labelFor="orderType" />
+      <SegmentedButton id="orderType" selectedKey="{warehouse>/orderType}" selectionChange=".onOrderTypeChange" width="100%">
+        <items><SegmentedButtonItem key="PUTAWAY" text="Put-away" icon="sap-icon://inbox" /><SegmentedButtonItem key="OUTBOUND" text="Outbound" icon="sap-icon://shipping-status" /></items>
+      </SegmentedButton>
+      <Label text="Eligible loads" labelFor="transportOrderLoads" />
+      <MultiComboBox id="transportOrderLoads" width="100%" items="{warehouse>/eligibleLoads}">
+        <core:Item key="{warehouse>id}" text="{= ${warehouse>id} + ' · ' + ${warehouse>item} + ' · ' + ${warehouse>locationId} }" />
+      </MultiComboBox>
+      <Label text="Operational priority" labelFor="orderPriority" />
+      <Select id="orderPriority" selectedKey="{warehouse>/orderPriority}" width="100%">
+        <items><core:Item key="NORMAL" text="Normal" /><core:Item key="HIGH" text="High" /><core:Item key="URGENT" text="Urgent" /></items>
+      </Select>
+      <Label text="Business objective" labelFor="orderObjective" />
+      <TextArea id="orderObjective" value="{warehouse>/orderObjective}" rows="3" width="100%" />
+      <MessageStrip text="The control tower will validate, plan, assign, and dispatch automatically. Priority affects fleet scheduling, not the VDA payload." type="Information" showIcon="true" />
+    </VBox>
+    <beginButton><Button text="Create and dispatch" type="Emphasized" press=".onCreateTransportOrder" /></beginButton>
+    <endButton><Button text="Cancel" press=".onCloseTransportOrder" /></endButton>
+  </Dialog>
+</core:FragmentDefinition>

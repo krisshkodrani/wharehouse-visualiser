@@ -1,0 +1,100 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core" xmlns:code="sap.ui.codeeditor">
+  <Dialog id="vdaInspectorDialog" contentWidth="92vw" contentHeight="85vh" stretchOnPhone="true" draggable="true" resizable="true" class="vdaInspectorDialog">
+    <customHeader>
+      <OverflowToolbar class="vdaInspectorHeader">
+        <core:Icon src="sap-icon://source-code" size="1.25rem" />
+        <VBox><Title text="VDA 5050 workbench" level="H2" /><Text text="{= 'TO-' + ${warehouse>/selectedOrder/shortId} + ' · ' + ${warehouse>/inspection/selectedTask/label} }" /></VBox>
+        <ToolbarSpacer />
+        <ObjectStatus text="VDA 5050 v3.0.0" state="Success" icon="sap-icon://sys-enter-2" />
+        <ObjectStatus text="{warehouse>/inspection/selectedDispatch/validityLabel}" state="{warehouse>/inspection/selectedDispatch/statusState}" inverted="true" />
+        <Button icon="sap-icon://decline" tooltip="Close inspector" press=".onCloseVdaInspector" />
+      </OverflowToolbar>
+    </customHeader>
+    <content>
+      <HBox fitContainer="true" renderType="Bare" class="vdaWorkbench">
+        <VBox width="19rem" renderType="Bare" class="vdaNavigator">
+          <VBox class="vdaNavigatorHeader"><Text text="TASKS &amp; BASE UPDATES" class="sectionEyebrow" /><Title text="Message history" level="H3" /><Text text="Newest updates appear first" /></VBox>
+          <List id="vdaNavigatorList" items="{warehouse>/inspection/navigatorItems}" itemPress=".onVdaNavigatorPress" showSeparators="None" class="vdaNavigatorList">
+            <CustomListItem type="{= ${warehouse>enabled} ? 'Active' : 'Inactive' }" selected="{warehouse>selected}">
+              <VBox visible="{= ${warehouse>kind} === 'TASK' }" class="vdaTaskGroup"><Title text="{warehouse>title}" level="H4" /><Text text="{warehouse>description}" /><ObjectStatus text="{warehouse>info}" state="{warehouse>infoState}" /></VBox>
+              <HBox visible="{= ${warehouse>kind} === 'DISPATCH' }" justifyContent="SpaceBetween" alignItems="Center" class="vdaUpdateItem">
+                <VBox><Title text="{warehouse>title}" level="H5" /><Text text="{warehouse>description}" /></VBox>
+                <ObjectStatus text="{warehouse>info}" state="{warehouse>infoState}" />
+              </HBox>
+            </CustomListItem>
+          </List>
+        </VBox>
+
+        <VBox renderType="Bare" class="vdaInspectorMain">
+          <OverflowToolbar class="vdaInspectorToolbar">
+            <SegmentedButton selectedKey="{warehouse>/vdaViewMode}" selectionChange=".onVdaViewModeChange">
+              <items><SegmentedButtonItem key="STRUCTURED" text="Structured" icon="sap-icon://tree" /><SegmentedButtonItem key="RAW" text="Raw JSON" icon="sap-icon://syntax" /></items>
+            </SegmentedButton>
+            <ToolbarSeparator />
+            <ObjectStatus title="Vehicle" text="{= ${warehouse>/inspection/selectedDispatch/manufacturer} + ' / ' + ${warehouse>/inspection/selectedDispatch/serialNumber} }" icon="sap-icon://shipping-status" />
+            <ObjectStatus title="Lifecycle" text="{warehouse>/inspection/selectedDispatch/status}" state="Information" />
+            <ToolbarSpacer />
+            <Button text="Latest" icon="sap-icon://refresh" type="Transparent" press=".onJumpToLatestVda" enabled="{= !${warehouse>/inspection/followLatest} }" />
+            <Button text="Copy" icon="sap-icon://copy" type="Transparent" press=".onCopyVdaJson" />
+            <Button text="Download" icon="sap-icon://download" type="Transparent" press=".onDownloadVdaJson" />
+          </OverflowToolbar>
+
+          <ScrollContainer vertical="true" horizontal="false" height="100%" visible="{= ${warehouse>/vdaViewMode} === 'STRUCTURED' }" class="vdaStructuredScroll">
+            <VBox class="vdaStructuredContent">
+              <MessageStrip visible="{= !!${warehouse>/inspection/selectedDispatch/parseError} }" type="Error" showIcon="true"
+                text="{= 'Payload could not be parsed: ' + ${warehouse>/inspection/selectedDispatch/parseError} }" />
+              <MessageStrip visible="{= !!${warehouse>/inspection/selectedDispatch/validationError} || !!${warehouse>/inspection/selectedDispatch/rejectionError} }" type="Error" showIcon="true"
+                text="{= ${warehouse>/inspection/selectedDispatch/rejectionError} || ${warehouse>/inspection/selectedDispatch/validationError} }" />
+
+              <HBox wrap="Wrap" class="vdaSummaryGrid">
+                <VBox><Label text="Order ID" /><Text text="{warehouse>/inspection/selectedDispatch/orderId}" wrapping="true" /></VBox>
+                <VBox><Label text="Update" /><ObjectNumber number="{warehouse>/inspection/selectedDispatch/orderUpdateId}" unit="orderUpdateId" /></VBox>
+                <VBox><Label text="Header ID" /><ObjectNumber number="{warehouse>/inspection/selectedDispatch/parsedPayload/headerId}" /></VBox>
+                <VBox><Label text="Published" /><Text text="{warehouse>/inspection/selectedDispatch/timeLabel}" /></VBox>
+              </HBox>
+
+              <VBox class="baseHorizonCard">
+                <HBox justifyContent="SpaceBetween" alignItems="Center"><VBox><Title text="Base release" level="H3" /><Text text="Released nodes may execute; horizon nodes remain planning information." /></VBox><ObjectNumber number="{warehouse>/inspection/selectedDispatch/releasedNodeCount}" unit="released" /></HBox>
+                <ProgressIndicator percentValue="{warehouse>/inspection/selectedDispatch/releasedPercent}"
+                  displayValue="{= ${warehouse>/inspection/selectedDispatch/releasedNodeCount} + ' base · ' + ${warehouse>/inspection/selectedDispatch/horizonNodeCount} + ' horizon' }" state="Information" />
+              </VBox>
+
+              <VBox visible="{warehouse>/inspection/selectedDispatch/hasDiff}" class="vdaDiffCard">
+                <HBox alignItems="Center"><core:Icon src="sap-icon://compare" /><VBox><Title text="Changes from previous update" level="H4" /><Text text="Semantic changes only; timestamps and header noise are omitted." /></VBox></HBox>
+                <List items="{warehouse>/inspection/selectedDispatch/diffItems}" showSeparators="None"><StandardListItem title="{warehouse>}" icon="sap-icon://add-activity" /></List>
+              </VBox>
+
+              <HBox justifyContent="SpaceBetween" alignItems="Center" class="sectionHeading"><VBox><Title text="Executable sequence" level="H3" /><Text text="Nodes and edges ordered by sequenceId" /></VBox><Text text="{= ${warehouse>/inspection/selectedDispatch/nodeCount} + ' nodes · ' + ${warehouse>/inspection/selectedDispatch/edgeCount} + ' edges' }" /></HBox>
+              <List items="{warehouse>/inspection/selectedDispatch/sequence}" itemPress=".onVdaSequencePress" noDataText="No sequence elements in this payload" showSeparators="None" class="vdaSequenceList">
+                <CustomListItem type="Active">
+                  <HBox class="vdaSequenceItem" alignItems="Center">
+                    <ObjectNumber number="{warehouse>sequenceId}" unit="seq" />
+                    <ObjectStatus text="{warehouse>kind}" state="{= ${warehouse>kind} === 'NODE' ? 'Information' : 'None' }" inverted="true" />
+                    <VBox><Title text="{warehouse>id}" level="H4" /><Text text="{warehouse>position}" /><Text text="{warehouse>actionSummary}" /></VBox>
+                    <Text text="{warehouse>speed}" />
+                    <ObjectStatus text="{warehouse>releaseLabel}" state="{= ${warehouse>released} ? 'Success' : 'Warning' }" icon="{= ${warehouse>released} ? 'sap-icon://unlocked' : 'sap-icon://pending' }" />
+                  </HBox>
+                </CustomListItem>
+              </List>
+
+              <VBox visible="{= !!${warehouse>/selectedVdaSequence} }" class="sequenceDetailCard">
+                <Text text="SELECTED ELEMENT" class="sectionEyebrow" />
+                <Title text="{= ${warehouse>/selectedVdaSequence/kind} + ' · ' + ${warehouse>/selectedVdaSequence/id} }" level="H4" />
+                <Text text="{warehouse>/selectedVdaSequence/actionDetails}" wrapping="true" renderWhitespace="true" />
+              </VBox>
+            </VBox>
+          </ScrollContainer>
+
+          <VBox visible="{= ${warehouse>/vdaViewMode} === 'RAW' }" height="100%" class="vdaRawPane">
+            <MessageStrip text="Exact schema-validated wire payload. This view is read-only." type="Information" showIcon="true" />
+            <code:CodeEditor value="{warehouse>/inspection/selectedDispatch/rawJson}" type="json" editable="false" height="100%" class="vdaCodeEditor">
+              <code:layoutData>
+                <FlexItemData growFactor="1" baseSize="0%" minHeight="0" />
+              </code:layoutData>
+            </code:CodeEditor>
+          </VBox>
+        </VBox>
+      </HBox>
+    </content>
+  </Dialog>
+</core:FragmentDefinition>

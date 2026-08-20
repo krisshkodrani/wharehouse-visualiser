@@ -1,5 +1,9 @@
 package com.example.warehouse;
 
+import com.example.warehouse.transport.DispatchService;
+import com.example.warehouse.routing.RoutePlanner;
+import com.example.warehouse.events.EventPublisher;
+import com.example.warehouse.observability.LogContext;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
@@ -10,6 +14,9 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.warehouse.fleet.VehicleAssignmentPolicy;
+import com.example.warehouse.routing.ReservationService;
+import com.example.warehouse.vda5050.VdaOrderFactory;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -49,7 +56,9 @@ class DispatchLoggingTest {
   }
 
   private DispatchService dispatchService(WarehouseStore store) {
-    return new DispatchService(store, new ObjectMapper(), mock(EventPublisher.class), mock(RoutePlanner.class));
+    RoutePlanner routes = mock(RoutePlanner.class);
+    return new DispatchService(store, new ObjectMapper(), mock(EventPublisher.class), routes,
+        new VehicleAssignmentPolicy(store), new ReservationService(store), new VdaOrderFactory(store, routes));
   }
 
   private ILoggingEvent single(String event) {

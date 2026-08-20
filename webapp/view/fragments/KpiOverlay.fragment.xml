@@ -1,0 +1,11 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <HBox class="mapKpis" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
+    <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/queuedOrderCount}" /><Text text="Queued" /></VBox>
+    <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/oldestQueuedLabel}" state="{warehouse>/oldestQueuedState}" /><Text text="Longest wait" /></VBox>
+    <VBox class="floatingCard compactKpi"><ObjectNumber number="{warehouse>/completedPerMinute}" unit="/min" state="Information" /><Text text="Throughput" /></VBox>
+    <VBox class="floatingCard compactKpi kpiActionable" tooltip="Show only orders needing attention">
+      <ObjectNumber number="{warehouse>/attentionCount}" state="{= ${warehouse>/attentionCount} > 0 ? 'Error' : 'None' }" />
+      <Link text="Attention" press=".onShowAttention" enabled="{= ${warehouse>/attentionCount} > 0 }" />
+    </VBox>
+  </HBox>
+</core:FragmentDefinition>

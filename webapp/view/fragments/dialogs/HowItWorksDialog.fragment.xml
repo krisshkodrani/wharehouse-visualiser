@@ -1,0 +1,64 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <Dialog id="howItWorksDialog" title="System design" contentWidth="74rem" stretchOnPhone="true"
+    horizontalScrolling="false" class="howItWorksDialog">
+    <VBox class="howItWorksContent">
+      <VBox class="systemIntro">
+        <ObjectStatus text="WAREHOUSE CONTROL TOWER / REFERENCE ARCHITECTURE" state="Information" inverted="true" />
+        <Title text="From operator intent to physical execution" level="H2" />
+        <Text text="The backend owns warehouse state. OpenUI5 issues commands and projects events; the vehicle remains an external VDA 5050 participant." wrapping="true" />
+      </VBox>
+      <VBox class="systemDiagram">
+        <HBox alignItems="Center" class="systemLaneHeader">
+          <core:Icon src="sap-icon://journey-arrive" decorative="true" />
+          <Title text="Durable command path" level="H3" />
+          <ObjectStatus text="AT-LEAST-ONCE" state="Success" />
+        </HBox>
+        <HBox alignItems="Stretch" justifyContent="Center" class="systemFlow systemCommandFlow">
+          <VBox alignItems="Center" justifyContent="Center" class="systemNode systemNodeHuman"><core:Icon src="sap-icon://employee" decorative="true" /><Title text="Operator" level="H4" /><Text text="Creates transport intent" textAlign="Center" wrapping="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemConnector"><Text text="COMMAND" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemNode systemNodeUi"><core:Icon src="sap-icon://desktop-mobile" decorative="true" /><Title text="OpenUI5 control tower" level="H4" /><Text text="REST commands / event projection" textAlign="Center" wrapping="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemConnector"><Text text="REST + IDEMPOTENCY" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemNode systemNodeCore">
+            <core:Icon src="sap-icon://process" decorative="true" /><Title text="Warehouse backend" level="H4" /><Text text="Planning, reservations, dispatch" textAlign="Center" wrapping="true" />
+            <HBox class="systemNodeTags"><ObjectStatus text="ONE TRANSACTION" state="Information" /><ObjectStatus text="OUTBOX" state="Success" /></HBox>
+          </VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemConnector"><Text text="VDA 5050 v3.0.0" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemNode systemNodeBroker"><core:Icon src="sap-icon://cloud" decorative="true" /><Title text="MQTT broker" level="H4" /><Text text="External integration boundary" textAlign="Center" wrapping="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemConnector"><Text text="ORDER / ACTION" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" /></VBox>
+          <VBox alignItems="Center" justifyContent="Center" class="systemNode systemNodeMachine"><core:Icon src="sap-icon://shipping-status" decorative="true" /><Title text="FL-01 simulator" level="H4" /><Text text="External mobile robot" textAlign="Center" wrapping="true" /></VBox>
+        </HBox>
+        <HBox justifyContent="Center" alignItems="Stretch" class="systemDependencies">
+          <VBox class="systemDependencyGroup">
+            <Text text="BACKEND-OWNED STATE AND EXECUTION" class="systemEyebrow" />
+            <HBox alignItems="Center" class="systemDependencyRow">
+              <VBox alignItems="Center" class="systemMiniNode"><core:Icon src="sap-icon://database" decorative="true" /><Title text="PostgreSQL" level="H4" /><Text text="Orders, tasks, inventory, reservations, audit" textAlign="Center" wrapping="true" /></VBox>
+              <VBox alignItems="Center" class="systemBranchConnector"><Text text="ATOMIC COMMIT / WCS" /><core:Icon src="sap-icon://synchronize" decorative="true" /></VBox>
+              <VBox alignItems="Center" class="systemMiniNode"><core:Icon src="sap-icon://factory" decorative="true" /><Title text="ROBOT-01 + conveyors" level="H4" /><Text text="Deterministic WCS execution" textAlign="Center" wrapping="true" /></VBox>
+            </HBox>
+          </VBox>
+          <VBox class="systemDependencyGroup systemOptionalGroup">
+            <Text text="OPTIONAL ADVISORY" class="systemEyebrow" />
+            <VBox alignItems="Center" class="systemMiniNode systemOptionalNode"><core:Icon src="sap-icon://lightbulb" decorative="true" /><Title text="OpenRouter" level="H4" /><Text text="Placement advice only; failure creates no work" textAlign="Center" wrapping="true" /></VBox>
+          </VBox>
+        </HBox>
+        <VBox class="systemReturnPath">
+          <HBox alignItems="Center" class="systemLaneHeader"><core:Icon src="sap-icon://journey-change" decorative="true" /><Title text="Operational return path" level="H3" /><ObjectStatus text="LATEST VALUE WINS" state="Warning" /></HBox>
+          <HBox alignItems="Center" justifyContent="Center" class="systemReturnFlow">
+            <Text text="FL-01 state + 20 Hz pose" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" />
+            <Text text="MQTT validation" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" />
+            <Text text="Backend transition + 2 Hz persistence" /><core:Icon src="sap-icon://navigation-right-arrow" decorative="true" />
+            <Text text="WebSocket events + browser interpolation" />
+          </HBox>
+        </VBox>
+      </VBox>
+      <HBox wrap="Wrap" class="systemLegend">
+        <ObjectStatus icon="sap-icon://status-positive" text="Commands are durable and replay-safe" state="Success" />
+        <ObjectStatus icon="sap-icon://status-critical" text="Intermediate poses may be coalesced" state="Warning" />
+        <ObjectStatus icon="sap-icon://locked" text="The 3D scene never decides inventory state" state="Information" />
+      </HBox>
+      <MessageStrip type="Information" showIcon="true" text="Business transport orders are not VDA orders. Dispatch translates the product model into schema-validated VDA messages only after the transaction commits." />
+      <Text class="howItWorksCaveat" wrapping="true" text="Reference implementation for design discussion. Not VDA-certified, not a functional-safety component, and not a production deployment." />
+    </VBox>
+    <endButton><Button text="Close" press=".onCloseHowItWorks" /></endButton>
+  </Dialog>
+</core:FragmentDefinition>

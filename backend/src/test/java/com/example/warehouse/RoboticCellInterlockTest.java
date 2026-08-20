@@ -1,5 +1,7 @@
 package com.example.warehouse;
 
+import com.example.warehouse.transport.RoboticCellService;
+import com.example.warehouse.events.EventPublisher;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;

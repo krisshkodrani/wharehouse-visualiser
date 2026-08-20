@@ -1,5 +1,7 @@
 package com.example.warehouse.simulator;
 
+import com.example.warehouse.simulator.vehicle.BatteryModel;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 

@@ -445,33 +445,65 @@ html, body, #content, #container, #container-uiarea, .warehousePage, .warehouseP
 /* Pending stages recede; the current stage is the only emphasised element. */
 .pipelineStrip > .sapMObjStatus:not(.sapMObjStatusSuccess):not(.sapMObjStatusInverted) { opacity: .45; }
 
-.howItWorksContent { gap: .8rem; padding: .35rem .25rem; }
-.howItWorksLead { font-size: .95rem; color: var(--sapTextColor); }
-.howItWorksGrid { gap: .7rem; }
-.howStep {
-  flex: 1 1 16rem;
-  min-width: 14rem;
-  gap: .35rem;
-  padding: .8rem .9rem;
+.howItWorksDialog .sapMDialogScrollCont { padding: 0; }
+.howItWorksContent { gap: 1rem; padding: 1.15rem 1.25rem 1rem; background: var(--sapBackgroundColor); }
+.systemIntro { gap: .35rem; }
+.systemIntro > .sapMObjStatus { align-self: flex-start; }
+.systemIntro > .sapMTitle { font-size: 1.35rem; color: var(--sapTextColor); }
+.systemIntro > .sapMText { max-width: 58rem; color: var(--sapContent_LabelColor); }
+.systemDiagram {
+  gap: .9rem;
+  padding: 1rem;
   border: 1px solid var(--sapGroup_ContentBorderColor);
-  border-radius: .65rem;
+  border-radius: .35rem;
   background: var(--sapGroup_ContentBackground);
+  background-image: linear-gradient(rgba(110, 126, 139, .08) 1px, transparent 1px), linear-gradient(90deg, rgba(110, 126, 139, .08) 1px, transparent 1px);
+  background-size: 1.5rem 1.5rem;
+  box-shadow: inset .22rem 0 0 var(--sapContent_FocusColor);
 }
-.howStepHead { gap: .55rem; }
-.howStepNumber {
-  flex-shrink: 0;
-  width: 1.45rem;
-  height: 1.45rem;
-  border-radius: 50%;
-  color: var(--sapButton_Emphasized_TextColor);
-  background: var(--sapContent_FocusColor);
-  font-size: .78rem;
-  font-weight: 700;
-  line-height: 1.45rem;
-  text-align: center;
+.systemLaneHeader { gap: .55rem; min-width: 0; }
+.systemLaneHeader > .sapUiIcon { color: var(--sapContent_IconColor); }
+.systemLaneHeader > .sapMTitle { flex: 1; font-size: .9rem; letter-spacing: .02em; text-transform: uppercase; }
+.systemFlow { gap: .45rem; min-width: 0; }
+.systemNode {
+  flex: 1 1 8.5rem;
+  min-width: 7.5rem;
+  min-height: 7.2rem;
+  gap: .28rem;
+  padding: .75rem .6rem;
+  border: 1px solid var(--sapGroup_ContentBorderColor);
+  border-top: .22rem solid var(--sapContent_FocusColor);
+  border-radius: .25rem;
+  background: var(--sapTile_Background);
+  box-shadow: 0 .18rem .45rem rgba(20, 42, 58, .1);
 }
-.howStep .sapMTitle { font-size: .88rem; }
-.howStep > .sapMText { font-size: .78rem; color: var(--sapContent_LabelColor); }
+.systemNode > .sapUiIcon, .systemMiniNode > .sapUiIcon { color: var(--sapContent_IconColor); font-size: 1.45rem; }
+.systemNode > .sapMTitle, .systemMiniNode > .sapMTitle { font-size: .84rem; text-align: center; }
+.systemNode > .sapMText, .systemMiniNode > .sapMText { font-size: .72rem; color: var(--sapContent_LabelColor); }
+.systemNodeHuman { border-top-color: var(--sapIndicationColor_5); }
+.systemNodeUi { border-top-color: var(--sapIndicationColor_6); }
+.systemNodeCore { flex-basis: 10.5rem; border-top-color: var(--sapIndicationColor_8); }
+.systemNodeBroker { border-top-color: var(--sapIndicationColor_7); }
+.systemNodeMachine { border-top-color: var(--sapIndicationColor_3); }
+.systemNodeTags { gap: .35rem; flex-wrap: wrap; justify-content: center; }
+.systemNodeTags .sapMObjStatusText { font-size: .62rem; font-weight: 700; }
+.systemConnector { flex: 0 1 5.8rem; min-width: 4.3rem; gap: .15rem; align-self: center; }
+.systemConnector > .sapMText, .systemBranchConnector > .sapMText, .systemEyebrow { font-size: .61rem; font-weight: 700; letter-spacing: .06em; color: var(--sapContent_LabelColor); text-align: center; }
+.systemConnector > .sapUiIcon { color: var(--sapContent_FocusColor); font-size: 1.2rem; }
+.systemDependencies { gap: .8rem; }
+.systemDependencyGroup { flex: 1 1 30rem; gap: .5rem; padding: .7rem; border: 1px dashed var(--sapGroup_ContentBorderColor); background: var(--sapInfobar_Background); }
+.systemOptionalGroup { flex-grow: 0; flex-basis: 14rem; }
+.systemDependencyRow { justify-content: center; gap: .8rem; }
+.systemMiniNode { flex: 1 1 10rem; gap: .25rem; padding: .55rem; }
+.systemBranchConnector { flex: 0 0 6.5rem; justify-content: center; gap: .2rem; }
+.systemBranchConnector > .sapUiIcon { color: var(--sapContent_FocusColor); }
+.systemOptionalNode { opacity: .78; }
+.systemReturnPath { gap: .55rem; padding-top: .8rem; border-top: 1px solid var(--sapGroup_ContentBorderColor); }
+.systemReturnFlow { gap: .55rem; padding: .65rem .8rem; background: var(--sapInfobar_Background); border-radius: .2rem; }
+.systemReturnFlow > .sapMText { font-size: .73rem; font-weight: 600; text-align: center; }
+.systemReturnFlow > .sapUiIcon { flex-shrink: 0; color: var(--sapCriticalTextColor); }
+.systemLegend { gap: .75rem 1.25rem; }
+.systemLegend > .sapMObjStatus { flex: 1 1 15rem; }
 .howItWorksCaveat { font-size: .72rem; color: var(--sapContent_LabelColor); }
 
 .seedDialog .sapMDialogSection { background: linear-gradient(145deg, var(--sapGroup_ContentBackground), var(--sapInfobar_Background)); }
@@ -496,6 +528,15 @@ html, body, #content, #container, #container-uiarea, .warehousePage, .warehouseP
   .controlTowerHeader .sapMObjStatus:nth-of-type(2) { display: none; }
   .vdaInspectorDialog { top: 0 !important; right: 0 !important; bottom: 0 !important; left: 0 !important; width: 100vw !important; max-width: 100vw !important; height: 100vh !important; max-height: 100vh !important; }
   .vdaNavigator { min-width: 13rem; width: 13rem !important; }
+  .howItWorksDialog { width: 100vw !important; max-width: 100vw !important; }
+  .systemCommandFlow { flex-direction: column; align-items: stretch !important; }
+  .systemCommandFlow > .systemNode { width: auto; min-height: 5.5rem; }
+  .systemCommandFlow > .systemConnector { min-height: 2.5rem; min-width: 0; }
+  .systemCommandFlow > .systemConnector > .sapUiIcon { transform: rotate(90deg); }
+  .systemDependencies, .systemDependencyRow, .systemReturnFlow { flex-direction: column; }
+  .systemOptionalGroup, .systemDependencyGroup { flex-basis: auto; }
+  .systemBranchConnector { flex-basis: auto; }
+  .systemReturnFlow > .sapUiIcon { transform: rotate(90deg); }
 }
 @media (max-width: 44rem) {
   .orderRail { width: 14rem !important; }

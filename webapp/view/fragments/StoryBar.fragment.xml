@@ -1,0 +1,28 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <VBox class="narrativeBar" visible="{= ${warehouse>/viewMode} === 'STORY' }">
+    <HBox class="narrativeNow" alignItems="Center" justifyContent="SpaceBetween">
+      <HBox alignItems="Center" class="narrativeNowText">
+        <ObjectStatus text="{= ${warehouse>/narrative/exception} ? 'ISSUE' : 'NOW' }"
+          state="{= ${warehouse>/narrative/exception} ? 'Error' : 'Success' }" inverted="true" />
+        <Text text="{warehouse>/narrative/sentence}" class="narrativeSentence" />
+      </HBox>
+      <Text text="{= (${warehouse>/agv/velocity} || 0).toFixed(1) + ' m/s · fork ' + (${warehouse>/agv/forkHeight} || 0).toFixed(2) + ' m' }"
+        class="narrativeTelemetry" />
+    </HBox>
+    <HBox class="narrativeProgress" alignItems="Center" justifyContent="SpaceBetween">
+      <HBox class="pipelineStrip" alignItems="Center" renderType="Bare" items="{warehouse>/narrative/steps}">
+        <ObjectStatus class="pipelineStep" text="{warehouse>label}"
+          icon="{= ${warehouse>state} === 'DONE' ? 'sap-icon://accept' : ${warehouse>state} === 'CURRENT' ? 'sap-icon://play' : 'sap-icon://circle-task' }"
+          state="{= ${warehouse>state} === 'DONE' ? 'Success' : ${warehouse>state} === 'CURRENT' ? 'Information' : 'None' }"
+          inverted="{= ${warehouse>state} === 'CURRENT' }" />
+      </HBox>
+      <Text text="{warehouse>/narrative/proofLine}" class="narrativeProof" />
+    </HBox>
+  </VBox>
+  <Toolbar class="activityStrip" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
+    <ObjectStatus text="LIVE" state="Success" inverted="true" />
+    <Text text="{warehouse>/activityText}" />
+    <ToolbarSpacer />
+    <Text text="{= (${warehouse>/agv/velocity} || 0).toFixed(1) + ' m/s · fork ' + (${warehouse>/agv/forkHeight} || 0).toFixed(2) + ' m' }" />
+  </Toolbar>
+</core:FragmentDefinition>

@@ -1,0 +1,11 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <VBox class="protocolHealthCard">
+    <HBox justifyContent="SpaceBetween" alignItems="Center">
+      <VBox><Text text="PROTOCOL HEALTH" class="sectionEyebrow" /><Title text="VDA 5050 exchange" level="H4" /></VBox>
+      <ObjectStatus text="{warehouse>/inspection/protocolHealthLabel}" state="{warehouse>/inspection/protocolHealthState}" icon="sap-icon://sys-enter-2" />
+    </HBox>
+    <Text text="Business tasks are grouped with every published base update, validation result, and wire payload." />
+    <Button text="Open protocol workbench" icon="sap-icon://inspect" type="Transparent" press=".onOpenVdaInspector"
+      enabled="{= ${warehouse>/inspection/protocolUpdateCount} > 0 }" />
+  </VBox>
+</core:FragmentDefinition>

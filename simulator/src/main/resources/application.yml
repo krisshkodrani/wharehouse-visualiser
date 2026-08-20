@@ -16,9 +16,14 @@ warehouse:
   mqtt-url: ${MQTT_URL:tcp://localhost:1883}
   mqtt-user: ${MQTT_USER:warehouse}
   mqtt-password: ${MQTT_PASSWORD:warehouse}
+  vehicle-id: ${AGV_ID:FL-01}
   speed: ${AGV_SPEED:2.5}
   loaded-speed: ${AGV_LOADED_SPEED:1.8}
   docking-speed: ${AGV_DOCKING_SPEED:0.7}
   acceleration: ${AGV_ACCELERATION:1.0}
   braking: ${AGV_BRAKING:1.5}
   battery-consumption-per-metre: ${AGV_BATTERY_CONSUMPTION_PER_METRE:0.015}
+  fork-lift-speed: ${AGV_FORK_LIFT_SPEED:0.75}
+  fork-extension-speed: ${AGV_FORK_EXTENSION_SPEED:0.55}
+  charge-per-minute: ${AGV_CHARGE_PER_MINUTE:5}
+  telemetry-interval-millis: ${AGV_TELEMETRY_INTERVAL_MS:50}

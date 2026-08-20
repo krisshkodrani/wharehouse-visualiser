@@ -1,0 +1,36 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <OverflowToolbar class="controlTowerHeader">
+    <Avatar displayShape="Square" initials="W" backgroundColor="Accent6" />
+    <VBox class="towerBrand">
+      <Title text="Warehouse Control Tower" level="H1" />
+      <Text text="{= ${warehouse>/warehouseName} + ' · ' + (${warehouse>/scenario/name} || 'Choose scenario') }" />
+    </VBox>
+    <ToolbarSpacer />
+    <ObjectStatus text="{warehouse>/connectionStatus}" icon="sap-icon://connected"
+      state="{= ${warehouse>/connectionStatus} === 'CONNECTED' ? 'Success' : 'Warning' }" />
+    <ObjectStatus title="Vehicle" text="{= ${warehouse>/agv/id} + ' · ' + (${warehouse>/agv/status} || '').replace('_', ' ') }" icon="sap-icon://shipping-status"
+      state="{= ${warehouse>/agv/status} === 'FAULT' ? 'Error' : ${warehouse>/agv/status} === 'MOVING' ? 'Information' : ${warehouse>/agv/status} === 'CHARGING' ? 'Warning' : 'Success' }" />
+    <ProgressIndicator width="6rem" percentValue="{warehouse>/agv/battery}" displayValue="{= Math.round(${warehouse>/agv/battery}) + '%' }"
+      state="{= ${warehouse>/agv/battery} &lt; 25 ? 'Error' : ${warehouse>/agv/battery} &lt; 40 ? 'Warning' : 'Success' }" />
+    <Button text="New transport order" icon="sap-icon://add" type="Emphasized" press=".onOpenTransportOrder" />
+    <MenuButton text="Presenter" icon="sap-icon://action-settings">
+      <menu><Menu itemSelected=".onPresenterMenuItem"><items>
+        <MenuItem text="{= ${warehouse>/operationState} === 'PAUSED' ? 'Resume fleet' : 'Pause fleet' }" key="pause"
+          icon="{= ${warehouse>/operationState} === 'PAUSED' ? 'sap-icon://media-play' : 'sap-icon://media-pause' }" />
+        <MenuItem text="Simulation speed" key="speed" icon="sap-icon://fast-forward">
+          <items>
+            <MenuItem text="{= ${warehouse>/timeScale} === 1 ? '1x  ·  active' : '1x' }" key="speed1" />
+            <MenuItem text="{= ${warehouse>/timeScale} === 2 ? '2x  ·  active' : '2x' }" key="speed2" />
+            <MenuItem text="{= ${warehouse>/timeScale} === 4 ? '4x  ·  active' : '4x' }" key="speed4" />
+          </items>
+        </MenuItem>
+        <MenuItem text="Receive inventory" key="receive" icon="sap-icon://add-product" startsSection="true" />
+        <MenuItem text="Reset scenario" key="reset" icon="sap-icon://refresh" />
+      </items></Menu></menu>
+    </MenuButton>
+    <Button icon="sap-icon://hint" tooltip="How this works" press=".onOpenHowItWorks" />
+    <Button icon="sap-icon://switch-views" press=".onToggleViewMode"
+      text="{= ${warehouse>/viewMode} === 'STORY' ? 'Engineer view' : 'Story view' }"
+      tooltip="Switch between the narrated overview and the full control tower" />
+  </OverflowToolbar>
+</core:FragmentDefinition>

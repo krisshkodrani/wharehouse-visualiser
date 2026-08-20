@@ -1,5 +1,9 @@
 package com.example.warehouse;
 
+import com.example.warehouse.events.EventPublisher;
+import com.example.warehouse.observability.WarehouseMetrics;
+import com.example.warehouse.mqtt.MqttGateway;
+import com.example.warehouse.transport.JobExecutionService;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -10,6 +14,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.example.warehouse.vda.Vda5050;
+import com.example.warehouse.config.WarehouseProperties;
+import com.example.warehouse.persistence.outbox.OutboxRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
@@ -30,8 +36,10 @@ class MqttGatewayTest {
     when(store.agv("FL-01")).thenReturn(new ApiModels.AgvView("FL-01", 11, -6, 0, 0, 80, "IDLE", null,
         false, "PARK-01", "IDLE", 0, 0, null));
     // The client is constructed but never connected, so no broker is needed.
-    return new MqttGateway(mapper, store, execution, mock(EventPublisher.class), metrics,
-        "tcp://localhost:1883", "warehouse", "warehouse");
+    WarehouseProperties properties = new WarehouseProperties("tcp://localhost:1883", "warehouse", "warehouse",
+        "mock", "", "openai/gpt-4o-mini", "", 60);
+    return new MqttGateway(mapper, store, execution, mock(EventPublisher.class), metrics, properties,
+        new OutboxRepository(store));
   }
 
   private MqttMessage state(String cancelActionId) throws Exception {

@@ -1,0 +1,25 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <VBox width="19rem" renderType="Bare" class="orderRail" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
+    <HBox justifyContent="SpaceBetween" alignItems="Center" class="railHeading">
+      <VBox><Title text="Transport orders" level="H2" /><Text text="Business intent and execution" /></VBox>
+      <ObjectNumber number="{= ${warehouse>/transportOrders}.length }" unit="{= ${warehouse>/orderFilter} === 'ATTENTION' ? 'flagged' : 'total' }" />
+    </HBox>
+    <MessageStrip visible="{= ${warehouse>/orderFilter} === 'ATTENTION' }" type="Error" showIcon="true"
+      text="Showing only orders that need attention." class="orderFilterStrip">
+      <link><Link text="Show all" press=".onClearOrderFilter" /></link>
+    </MessageStrip>
+    <List id="transportOrderList" items="{warehouse>/transportOrders}" itemPress=".onOrderPress" noDataText="No transport orders yet" showSeparators="None" class="transportOrderList">
+      <CustomListItem type="Active">
+        <VBox class="orderCard">
+          <HBox justifyContent="SpaceBetween" alignItems="Center">
+            <Title text="{= 'TO-' + ${warehouse>shortId} }" level="H4" />
+            <ObjectStatus text="{warehouse>status}" state="{= ${warehouse>status} === 'COMPLETED' ? 'Success' : ${warehouse>status} === 'FAILED' ? 'Error' : ${warehouse>status} === 'IN_PROGRESS' ? 'Information' : 'None' }" inverted="true" />
+          </HBox>
+          <Text text="{= ${warehouse>displayType} + ' · ' + ${warehouse>priority} }" class="orderType" />
+          <HBox justifyContent="SpaceBetween"><Text text="{= ${warehouse>tasks}.length + ' load task(s)' }" /><Text text="{warehouse>assignedAgv}" /></HBox>
+          <ProgressIndicator percentValue="{warehouse>progress}" displayValue="{= ${warehouse>completedTasks} + ' / ' + ${warehouse>tasks}.length }" state="Information" />
+        </VBox>
+      </CustomListItem>
+    </List>
+  </VBox>
+</core:FragmentDefinition>

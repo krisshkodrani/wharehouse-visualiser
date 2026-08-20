@@ -1,5 +1,6 @@
 package com.example.warehouse;
 
+import com.example.warehouse.inventory.AisleDirective;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

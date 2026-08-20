@@ -1,0 +1,21 @@
+<core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
+  <Dialog id="seedDialog" showHeader="false" contentWidth="54rem" stretchOnPhone="true" class="seedDialog">
+    <VBox class="seedContent">
+      <ObjectStatus text="VDA 5050 v3.0.0 DEMO" state="Information" icon="sap-icon://connected" />
+      <Title text="Choose today’s warehouse story" level="H1" />
+      <Text text="We’ll prepare inventory, fleet state, and representative transport orders. Work starts automatically." />
+      <HBox wrap="Wrap" class="scenarioTiles">
+        <GenericTile header="Balanced shift" subheader="Inbound and outbound share one vehicle" press=".onStartBalanced" class="scenarioTile">
+          <tileContent><TileContent footer="32 stored · 4 inbound"><content><NumericContent value="2" scale="orders" icon="sap-icon://process" /></content></TileContent></tileContent>
+        </GenericTile>
+        <GenericTile header="Inbound surge" subheader="Clear a busy staging lane" press=".onStartInbound" class="scenarioTile recommendedTile">
+          <tileContent><TileContent footer="12 inbound · High priority"><content><NumericContent value="6" scale="loads" icon="sap-icon://inbox" valueColor="Good" /></content></TileContent></tileContent>
+        </GenericTile>
+        <GenericTile header="Outbound wave" subheader="Fulfil a priority shipment" press=".onStartOutbound" class="scenarioTile">
+          <tileContent><TileContent footer="40 stored · Urgent"><content><NumericContent value="6" scale="loads" icon="sap-icon://shipping-status" valueColor="Critical" /></content></TileContent></tileContent>
+        </GenericTile>
+      </HBox>
+      <MessageStrip text="Reload keeps the selected scenario. Reset returns to this dialogue." type="Information" showIcon="true" />
+    </VBox>
+  </Dialog>
+</core:FragmentDefinition>

@@ -45,6 +45,14 @@ Outbound adds a deterministic WCS cell after the AGV task: a pallet arrives at `
 
 Transport orders express operator intent; transport tasks are independently schedulable load movements; VDA orders are versioned device instructions. The dispatch audit links these layers without making the product API depend on VDA sequence mechanics. PostgreSQL transactions protect order/task/inventory changes. The outbox makes database commit and eventual MQTT publication observable; delivery is at-least-once, so stable order/update identities and conditional transitions provide idempotency.
 
+## Code boundaries
+
+The browser keeps REST commands and WebSocket event transport in separate services. Pure selectors and presentation builders derive operator-facing state; neither is authoritative for inventory or execution. Babylon material construction and telemetry interpolation are isolated from scene orchestration so pose and fork samples continue to share one delayed render clock.
+
+Backend dispatch delegates vehicle selection to `fleet/VehicleAssignmentPolicy`, destination claims to `routing/ReservationService`, and business-task-to-VDA translation to `vda5050/VdaOrderFactory`. The public controller maps repository projections to explicit records under `api/dto`; JSON contracts remain unchanged. MQTT topic construction is transport-only, and pending delivery state is accessed through `persistence/outbox/OutboxRepository`. Business state, reservations, dispatch audit, and the outbox row are still committed in the original transaction before asynchronous publication.
+
+The simulator remains an MQTT-only external vehicle. Its Paho session is isolated under `mqtt`, physical calculations under `vehicle`, and epoch/pause/time-scale behavior under `runtime`; none of these modules can access backend persistence.
+
 ## Invariants and failure behavior
 
 - One active task per AGV, one active reservation per load, and one active destination-zone reservation per task.
@@ -54,6 +62,24 @@ Transport orders express operator intent; transport tasks are independently sche
 - Invalid VDA input becomes an observable rejection and cannot mutate domain state.
 - Broker loss leaves commands pending; reconnect resumes outbox publication and synchronizes runtime state.
 - AI advice is optional. Provider failure creates no tasks and changes no inventory.
+
+## Code boundaries
+
+The backend package structure follows the runtime boundaries above:
+
+- `api` owns REST controllers, Problem Details, mapping, and public DTOs.
+- `transport` orchestrates transport orders, tasks, dispatch, execution, and robotic-cell work.
+- `fleet`, `routing`, and `inventory` own their respective policies and deterministic rules.
+- `mqtt` owns broker transport; `vda5050` validates and interprets standard messages.
+- `persistence.outbox` owns durable command publication.
+- `events` publishes domain/application events to WebSocket clients.
+- `scenario` owns demo presets and simulation controls.
+- `observability` owns correlation context, client logs, and metrics.
+
+The simulator mirrors an external vehicle. `vehicle` contains protocol-neutral physical state,
+`execution` sequences orders/nodes/actions, `runtime` owns epoch-aware time and controls,
+`mqtt` owns broker transport, and `vda5050` converts between logical state and validated wire
+records. It has no backend database dependency.
 
 ## Capacity and trade-offs
 
