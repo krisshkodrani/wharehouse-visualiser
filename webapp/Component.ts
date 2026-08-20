@@ -6,11 +6,12 @@ import { buildNarrative } from "./model/narrative";
 
 /**
  * Story view is the default: the 3D warehouse plus one narrated line answers "what is
- * happening?" on sight, and the full control tower stays one click away in Engineer view.
+ * happening?" on sight, and the operational workspace stays one click away.
  */
-function initialViewMode(): "STORY" | "ENGINEER" {
+function initialViewMode(): "STORY" | "OPERATIONS" {
   try {
-    return window.localStorage.getItem("warehouse.viewMode") === "ENGINEER" ? "ENGINEER" : "STORY";
+    const stored = window.localStorage.getItem("warehouse.viewMode");
+    return stored === "OPERATIONS" || stored === "ENGINEER" ? "OPERATIONS" : "STORY";
   } catch {
     return "STORY";
   }
@@ -27,6 +28,8 @@ export default class Component extends UIComponent {
       ...structuredClone(warehouseModelData),
       mode: "LIVE",
       viewMode: initialViewMode(),
+      compactLayout: window.matchMedia("(max-width: 62rem)").matches,
+      detailPanelOpen: false,
       narrative: buildNarrative(null, null),
       connectionStatus: "CONNECTING",
       planningStatus: "READY",
@@ -48,7 +51,7 @@ export default class Component extends UIComponent {
       selectedVdaDispatches: [],
       selectedVdaPayload: "No VDA order has been published yet.",
       inspection: emptyOrderInspection(),
-      activityFilter: "ALL",
+      activityFilter: "EXCEPTION",
       visibleInspectionActivity: [],
       vdaViewMode: "STRUCTURED",
       selectedVdaSequence: null,

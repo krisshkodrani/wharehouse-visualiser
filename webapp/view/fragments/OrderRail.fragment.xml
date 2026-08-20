@@ -1,7 +1,7 @@
 <core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
-  <VBox width="19rem" renderType="Bare" class="orderRail" visible="{= ${warehouse>/viewMode} === 'ENGINEER' }">
+  <VBox width="19rem" renderType="Bare" class="orderRail" visible="{= ${warehouse>/viewMode} === 'OPERATIONS' }">
     <HBox justifyContent="SpaceBetween" alignItems="Center" class="railHeading">
-      <VBox><Title text="Transport orders" level="H2" /><Text text="Business intent and execution" /></VBox>
+      <VBox><Title text="Transport orders" level="H2" /><Text text="Work queue and exceptions" /></VBox>
       <ObjectNumber number="{= ${warehouse>/transportOrders}.length }" unit="{= ${warehouse>/orderFilter} === 'ATTENTION' ? 'flagged' : 'total' }" />
     </HBox>
     <MessageStrip visible="{= ${warehouse>/orderFilter} === 'ATTENTION' }" type="Error" showIcon="true"

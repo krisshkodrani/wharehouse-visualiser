@@ -3,6 +3,7 @@
   <Page showHeader="false" enableScrolling="false" class="warehousePage controlTowerPage">
     <VBox height="100%" renderType="Bare">
       <core:Fragment fragmentName="warehouse.visualizer.view.fragments.Header" type="XML" />
+      <core:Fragment fragmentName="warehouse.visualizer.view.fragments.KpiOverlay" type="XML" />
 
       <HBox fitContainer="true" renderType="Bare" class="towerWorkspace">
         <core:Fragment fragmentName="warehouse.visualizer.view.fragments.OrderRail" type="XML" />

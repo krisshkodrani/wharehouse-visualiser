@@ -6,7 +6,7 @@ import org.springframework.stereotype.Repository;
 
 /** Repository adapter for the durable MQTT outbox. */
 @Repository
-public final class OutboxRepository {
+public class OutboxRepository {
   private final WarehouseStore store;
 
   public OutboxRepository(WarehouseStore store) {

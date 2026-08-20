@@ -44,6 +44,11 @@ export default class MainController extends Controller {
   private readonly loadStatuses = new Map<string, string>();
   private readonly jobStatuses = new Map<string, string>();
   private simulationEpoch = 0;
+  private compactLayoutQuery?: MediaQueryList;
+  private readonly onCompactLayoutChange = (event: MediaQueryListEvent): void => {
+    this.model().setProperty("/compactLayout", event.matches);
+    if (!event.matches) this.model().setProperty("/detailPanelOpen", false);
+  };
 
   public onInit(): void {
     this.getView()?.addEventDelegate({ onAfterRendering: () => this.initialize() });
@@ -51,6 +56,7 @@ export default class MainController extends Controller {
 
   public onExit(): void {
     this.events.disconnect();
+    this.compactLayoutQuery?.removeEventListener("change", this.onCompactLayoutChange);
     if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
   }
 
@@ -189,19 +195,18 @@ export default class MainController extends Controller {
   public onOrderPress(event: Event): void {
     const parameters = event.getParameters() as { listItem?: { getBindingContext: (name: string) => { getObject: () => ApiTransportOrder } | null } };
     const order = parameters.listItem?.getBindingContext("warehouse")?.getObject();
-    if (order) this.selectOrder(order);
+    if (order) {
+      this.selectOrder(order);
+      if (this.model().getProperty("/compactLayout")) this.model().setProperty("/detailPanelOpen", true);
+    }
   }
+
+  public onOpenOrderDetails(): void { this.model().setProperty("/detailPanelOpen", true); }
+  public onCloseOrderDetails(): void { this.model().setProperty("/detailPanelOpen", false); }
 
   public onTaskPress(event: Event): void {
     const task = this.bindingObject<TaskInspection>(event, "listItem");
     if (task) this.updateInspection(task.id, undefined, true);
-  }
-
-  public onInspectTaskVda(event: Event): void {
-    const task = this.bindingObject<TaskInspection>(event, "source");
-    if (!task) return;
-    this.updateInspection(task.id, undefined, true);
-    this.openVdaInspector();
   }
 
   public onOpenVdaInspector(): void {
@@ -231,13 +236,6 @@ export default class MainController extends Controller {
     this.model().setProperty("/vdaViewMode", (event.getSource() as SegmentedButton).getSelectedKey());
   }
 
-  public onActivityFilterChange(event: Event): void {
-    const filter = (event.getSource() as SegmentedButton).getSelectedKey() as InspectionActivityFilter;
-    const inspection = this.model().getProperty("/inspection") as OrderInspection;
-    this.model().setProperty("/activityFilter", filter);
-    this.model().setProperty("/visibleInspectionActivity", filterInspectionActivity(inspection.activity, filter));
-  }
-
   public async onCopyVdaJson(): Promise<void> {
     const raw = (this.model().getProperty("/inspection/selectedDispatch/rawJson") as string | undefined) ?? "";
     if (!raw) return;
@@ -263,26 +261,25 @@ export default class MainController extends Controller {
     catch (error) { MessageBox.error(error instanceof Error ? error.message : String(error)); }
   }
 
-  /** Single dispatch point for the Presenter menu, including its speed submenu. */
-  public onPresenterMenuItem(event: Event): void {
+  /** Single dispatch point for demo-only controls, including its speed submenu. */
+  public onDemoControlsMenuItem(event: Event): void {
     const key = (event.getParameters() as { item?: { getKey: () => string } }).item?.getKey();
     switch (key) {
       case "pause": void this.onToggleOperations(); break;
       case "speed1": void this.applySpeed(1); break;
       case "speed2": void this.applySpeed(2); break;
       case "speed4": void this.applySpeed(4); break;
-      case "receive": this.onOpenReceive(); break;
       case "reset": this.onResetSimulation(); break;
       default: break;
     }
   }
 
   /**
-   * Story view keeps the 3D warehouse and one narrated line; Engineer view restores the
-   * full control tower. Both render the same model, so switching cannot rebuild the scene.
+   * Story view keeps the 3D warehouse and narration; Operations restores the order queue,
+   * operational KPIs and selected-order actions. Both render the same authoritative model.
    */
   public onToggleViewMode(): void {
-    const next = this.model().getProperty("/viewMode") === "STORY" ? "ENGINEER" : "STORY";
+    const next = this.model().getProperty("/viewMode") === "STORY" ? "OPERATIONS" : "STORY";
     this.model().setProperty("/viewMode", next);
     try { window.localStorage.setItem(VIEW_MODE_KEY, next); } catch { /* private browsing */ }
     // The canvas needs no explicit resize: WarehouseViewport observes its own root with a
@@ -301,6 +298,9 @@ export default class MainController extends Controller {
   private initialize(): void {
     if (this.initialized) return;
     this.initialized = true;
+    this.compactLayoutQuery = window.matchMedia("(max-width: 62rem)");
+    this.model().setProperty("/compactLayout", this.compactLayoutQuery.matches);
+    this.compactLayoutQuery.addEventListener("change", this.onCompactLayoutChange);
     if (!this.sceneConfigured) {
       const data = this.model().getData() as WarehouseModelData;
       const fallback = data.warehouses[0];
@@ -354,7 +354,7 @@ export default class MainController extends Controller {
     const current = orders.find((order) => order.id === selectedId);
     // Story view narrates whatever is live, so it follows the work rather than staying
     // pinned to a completed order — a narration with no subject is worse than no narration.
-    // Engineer view keeps the operator's explicit choice.
+    // Operations view keeps the operator's explicit choice.
     const selected = model.getProperty("/viewMode") === "STORY"
       ? this.mostRelevantOrder(orders) ?? current
       : current ?? this.mostRelevantOrder(orders);

@@ -1,10 +1,7 @@
 <core:FragmentDefinition xmlns="sap.m" xmlns:core="sap.ui.core">
   <VBox class="activitySection">
-    <VBox class="sectionHeading"><Title text="Activity" level="H3" /><Text text="Authoritative task and protocol milestones" /></VBox>
-    <SegmentedButton selectedKey="{warehouse>/activityFilter}" selectionChange=".onActivityFilterChange" width="100%">
-      <items><SegmentedButtonItem key="ALL" text="All" /><SegmentedButtonItem key="TASK" text="Tasks" /><SegmentedButtonItem key="VDA" text="VDA" /><SegmentedButtonItem key="EXCEPTION" text="Errors" /></items>
-    </SegmentedButton>
-    <List items="{warehouse>/visibleInspectionActivity}" noDataText="No matching activity" showSeparators="None" class="activityFeed">
+    <VBox class="sectionHeading"><Title text="Exceptions" level="H3" /><Text text="Problems that may require operator action" /></VBox>
+    <List items="{warehouse>/visibleInspectionActivity}" noDataText="No exceptions for this order" showSeparators="None" class="activityFeed">
       <CustomListItem>
         <HBox class="activityItem" alignItems="Start">
           <core:Icon src="{warehouse>icon}" color="{= ${warehouse>state} === 'Error' ? '#bb0000' : ${warehouse>state} === 'Success' ? '#188918' : '#0a6ed1' }" />

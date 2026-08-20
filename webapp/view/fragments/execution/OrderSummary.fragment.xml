@@ -6,16 +6,19 @@
         <Title text="{= ${warehouse>/selectedOrder/shortId} ? 'TO-' + ${warehouse>/selectedOrder/shortId} : 'No order selected' }" level="H2" />
         <Text text="{= ${warehouse>/selectedOrder/type} ? (${warehouse>/selectedOrder/type} === 'PUTAWAY' ? 'Put-away' : 'Outbound') + ' · ' + ${warehouse>/selectedOrder/priority} + ' priority' : 'Choose or create a transport order' }" />
       </VBox>
-      <ObjectStatus text="{warehouse>/selectedOrder/status}" state="{= ${warehouse>/selectedOrder/status} === 'COMPLETED' ? 'Success' : ${warehouse>/selectedOrder/status} === 'FAILED' ? 'Error' : 'Information' }" inverted="true" />
+      <HBox alignItems="Center">
+        <ObjectStatus text="{warehouse>/selectedOrder/status}" state="{= ${warehouse>/selectedOrder/status} === 'COMPLETED' ? 'Success' : ${warehouse>/selectedOrder/status} === 'FAILED' ? 'Error' : 'Information' }" inverted="true" />
+        <Button icon="sap-icon://decline" tooltip="Close order details" type="Transparent" press=".onCloseOrderDetails" visible="{warehouse>/compactLayout}" />
+      </HBox>
     </HBox>
     <ProgressIndicator percentValue="{warehouse>/inspection/progress}" displayValue="{= ${warehouse>/inspection/completedTasks} + ' of ' + ${warehouse>/inspection/tasks}.length + ' tasks' }" state="Information" />
     <HBox class="executionFacts" justifyContent="SpaceBetween">
       <VBox><Label text="Assigned AGV" /><Text text="{warehouse>/inspection/assignedAgv}" /></VBox>
-      <VBox><Label text="VDA updates" /><ObjectNumber number="{warehouse>/inspection/protocolUpdateCount}" /></VBox>
-      <VBox><Label text="Schema" /><ObjectStatus text="3.0.0" state="Success" /></VBox>
+      <VBox><Label text="Load movements" /><ObjectNumber number="{= ${warehouse>/inspection/tasks}.length }" /></VBox>
+      <VBox><Label text="Needs attention" /><ObjectStatus text="{= ${warehouse>/selectedOrder/status} === 'FAILED' ? 'Yes' : 'No' }" state="{= ${warehouse>/selectedOrder/status} === 'FAILED' ? 'Error' : 'Success' }" /></VBox>
     </HBox>
     <HBox class="executionActions" justifyContent="SpaceBetween">
-      <Button text="Inspect VDA 5050" icon="sap-icon://source-code" type="Emphasized" press=".onOpenVdaInspector"
+      <Button text="Technical details" icon="sap-icon://inspect" type="Transparent" press=".onOpenVdaInspector"
         enabled="{= ${warehouse>/inspection/protocolUpdateCount} > 0 }" />
       <Button text="Cancel" icon="sap-icon://decline" type="Transparent" press=".onCancelSelectedOrder"
         enabled="{= !!${warehouse>/selectedOrder/id} &amp;&amp; ${warehouse>/selectedOrder/status} !== 'COMPLETED' &amp;&amp; ${warehouse>/selectedOrder/status} !== 'CANCELLED' }" />

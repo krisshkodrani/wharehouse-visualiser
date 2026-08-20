@@ -267,8 +267,9 @@ class AgvSimulator implements ActionExecutor.Context, NodeExecutor.Context, Orde
   }
 
   @Override
-  public void cleanupOrder(Vda5050.Order order) {
-    if (order.orderId().equals(activeOrder)) activeOrder = null;
+  public synchronized void cleanupOrder(Vda5050.Order order) {
+    if (!order.orderId().equals(activeOrder)) return;
+    activeOrder = null;
     activeOrderPayload.set(null);
     cancelRequested = false;
     preemptRequested = false;
@@ -490,10 +491,15 @@ class AgvSimulator implements ActionExecutor.Context, NodeExecutor.Context, Orde
       if ("RESET".equals(command)) {
         clock.reset(epoch);
         activeOrder = null;
+        activeOrderPayload.set(null);
         completedOrders.clear();
         // A queued preemption belongs to the epoch that is being torn down.
         pendingOrder.set(null);
+        cancelRequested = false;
         preemptRequested = false;
+        instantActionStates = List.of();
+        lastNodeId = "";
+        lastNodeSequenceId = 0;
         fork.reset(String.valueOf(value.getOrDefault("handlingPhase", "CHARGING")));
         vehicle.reset(
             ((Number) value.getOrDefault("x", 11)).doubleValue(),

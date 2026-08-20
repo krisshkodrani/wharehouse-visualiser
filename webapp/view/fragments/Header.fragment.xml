@@ -8,13 +8,17 @@
     <ToolbarSpacer />
     <ObjectStatus text="{warehouse>/connectionStatus}" icon="sap-icon://connected"
       state="{= ${warehouse>/connectionStatus} === 'CONNECTED' ? 'Success' : 'Warning' }" />
-    <ObjectStatus title="Vehicle" text="{= ${warehouse>/agv/id} + ' · ' + (${warehouse>/agv/status} || '').replace('_', ' ') }" icon="sap-icon://shipping-status"
+    <ObjectStatus title="Vehicle" text="{= ${warehouse>/agv/id} + ' · ' + (${warehouse>/agv/status} || '').replace('_', ' ') + ' · ' + Math.round(${warehouse>/agv/battery}) + '%' }" icon="sap-icon://shipping-status"
       state="{= ${warehouse>/agv/status} === 'FAULT' ? 'Error' : ${warehouse>/agv/status} === 'MOVING' ? 'Information' : ${warehouse>/agv/status} === 'CHARGING' ? 'Warning' : 'Success' }" />
-    <ProgressIndicator width="6rem" percentValue="{warehouse>/agv/battery}" displayValue="{= Math.round(${warehouse>/agv/battery}) + '%' }"
-      state="{= ${warehouse>/agv/battery} &lt; 25 ? 'Error' : ${warehouse>/agv/battery} &lt; 40 ? 'Warning' : 'Success' }" />
-    <Button text="New transport order" icon="sap-icon://add" type="Emphasized" press=".onOpenTransportOrder" />
-    <MenuButton text="Presenter" icon="sap-icon://action-settings">
-      <menu><Menu itemSelected=".onPresenterMenuItem"><items>
+    <Button text="New transport order" icon="sap-icon://add" type="Emphasized" press=".onOpenTransportOrder">
+      <layoutData><OverflowToolbarLayoutData priority="NeverOverflow" /></layoutData>
+    </Button>
+    <Button id="receiveInventoryAction" text="Receive inventory" icon="sap-icon://add-product" type="Transparent" press=".onOpenReceive">
+      <layoutData><OverflowToolbarLayoutData priority="NeverOverflow" /></layoutData>
+    </Button>
+    <MenuButton id="demoControlsAction" text="Demo controls" icon="sap-icon://action-settings">
+      <layoutData><OverflowToolbarLayoutData priority="NeverOverflow" /></layoutData>
+      <menu><Menu itemSelected=".onDemoControlsMenuItem"><items>
         <MenuItem text="{= ${warehouse>/operationState} === 'PAUSED' ? 'Resume fleet' : 'Pause fleet' }" key="pause"
           icon="{= ${warehouse>/operationState} === 'PAUSED' ? 'sap-icon://media-play' : 'sap-icon://media-pause' }" />
         <MenuItem text="Simulation speed" key="speed" icon="sap-icon://fast-forward">
@@ -24,13 +28,16 @@
             <MenuItem text="{= ${warehouse>/timeScale} === 4 ? '4x  ·  active' : '4x' }" key="speed4" />
           </items>
         </MenuItem>
-        <MenuItem text="Receive inventory" key="receive" icon="sap-icon://add-product" startsSection="true" />
-        <MenuItem text="Reset scenario" key="reset" icon="sap-icon://refresh" />
+        <MenuItem text="Reset scenario" key="reset" icon="sap-icon://refresh" startsSection="true" />
       </items></Menu></menu>
     </MenuButton>
-    <Button icon="sap-icon://hint" tooltip="How this works" press=".onOpenHowItWorks" />
-    <Button icon="sap-icon://switch-views" press=".onToggleViewMode"
-      text="{= ${warehouse>/viewMode} === 'STORY' ? 'Engineer view' : 'Story view' }"
-      tooltip="Switch between the narrated overview and the full control tower" />
+    <Button id="systemDesignAction" icon="sap-icon://hint" tooltip="Help and system design" press=".onOpenHowItWorks">
+      <layoutData><OverflowToolbarLayoutData priority="NeverOverflow" /></layoutData>
+    </Button>
+    <Button id="viewModeAction" icon="sap-icon://switch-views" press=".onToggleViewMode"
+      text="{= ${warehouse>/viewMode} === 'STORY' ? 'Operations view' : 'Story view' }"
+      tooltip="Switch between the narrated overview and the operations workspace">
+      <layoutData><OverflowToolbarLayoutData priority="NeverOverflow" /></layoutData>
+    </Button>
   </OverflowToolbar>
 </core:FragmentDefinition>

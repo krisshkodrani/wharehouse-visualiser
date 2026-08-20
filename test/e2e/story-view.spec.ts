@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 /**
  * Story view is what a first-time viewer meets, so it is asserted directly: the map has to
  * dominate, the narration has to have a subject without anyone clicking, and the dense
- * control tower has to remain reachable in one click.
+ * operations workspace has to remain reachable in one click.
  */
 
 const task = {
@@ -59,7 +59,7 @@ test("opens in story view with the map dominant and no permanent rails", async (
   await expect(page.locator(".narrativeBar")).toBeVisible();
   await expect(page.locator(".orderRail")).toHaveCount(0);
   await expect(page.locator(".orderDetail")).toHaveCount(0);
-  await expect(page.locator(".mapKpis")).toHaveCount(0);
+  await expect(page.locator(".operationsSummary")).toHaveCount(0);
 
   // The map must own the viewport, not share it with two rails.
   const canvas = await page.locator("canvas.warehouseCanvas").boundingBox();
@@ -84,7 +84,7 @@ test("shows every pipeline stage with exactly one current", async ({ page }) => 
 });
 
 test("explains the architecture on demand", async ({ page }) => {
-  await page.getByRole("button", { name: "How this works" }).click();
+  await page.getByRole("button", { name: "Help and system design" }).click();
   const dialog = page.getByRole("dialog", { name: "System design" });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".systemNode")).toHaveCount(5);
@@ -97,7 +97,7 @@ test("explains the architecture on demand", async ({ page }) => {
   await expect(dialog).toContainText("Durable command path");
   await expect(dialog).toContainText("Operational return path");
   await expect(dialog).toContainText("VDA 5050 v3.0.0");
-  await expect(dialog).toContainText("not VDA-certified");
+  await expect(dialog).toContainText("Not VDA-certified");
   const overflows = await dialog.locator(".howItWorksContent").evaluate((element) =>
     element.scrollWidth > element.clientWidth + 1);
   expect(overflows, "system diagram overflows the dialog horizontally").toBe(false);
@@ -105,24 +105,39 @@ test("explains the architecture on demand", async ({ page }) => {
   await expect(dialog).toBeHidden();
 });
 
-test("engineer view is one click away and returns", async ({ page }) => {
-  await page.getByRole("button", { name: "Engineer view" }).click();
+test("operations view is one click away and keeps technical data contextual", async ({ page }) => {
+  await page.getByRole("button", { name: "Operations view" }).click();
   await expect(page.getByText("Transport orders", { exact: true })).toBeVisible();
   await expect(page.locator(".narrativeBar")).toHaveCount(0);
-  await expect(page.locator(".activityStrip")).toBeVisible();
+  await expect(page.locator(".operationsSummary")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Technical details" })).toHaveCount(1);
+  await expect(page.getByText("VDA updates", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Protocol health", { exact: false })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Story view" }).click();
   await expect(page.locator(".narrativeBar")).toBeVisible();
   await expect(page.locator(".orderRail")).toHaveCount(0);
 });
 
-test("presenter controls stay reachable when the rails are hidden", async ({ page }) => {
+test("demo and operational controls remain clearly separated", async ({ page }) => {
   // Reset and simulation speed used to live in the order-rail footer, which story view hides.
-  await page.getByRole("button", { name: "Presenter" }).click();
+  await expect(page.locator("[id$='receiveInventoryAction']")).toBeVisible();
+  await page.getByRole("button", { name: /Demo controls/ }).click();
   const menu = page.getByRole("menu");
   await expect(menu.getByText("Reset scenario")).toBeVisible();
   await expect(menu.getByText("Simulation speed")).toBeVisible();
-  await expect(menu.getByText("Receive inventory")).toBeVisible();
+  await expect(menu.getByText("Receive inventory")).toHaveCount(0);
+});
+
+test("compact operations view keeps selected-order actions reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 760 });
+  await page.getByRole("button", { name: "Operations view" }).click();
+  await expect(page.locator(".orderDetail")).toHaveCount(0);
+  await page.getByRole("button", { name: "Order details" }).click();
+  await expect(page.getByRole("button", { name: "Technical details" })).toBeVisible();
+  await expect(page.locator(".orderDetail").getByRole("button", { name: "Cancel" })).toBeVisible();
+  await page.getByRole("button", { name: "Close order details" }).click();
+  await expect(page.locator(".orderDetail")).toHaveCount(0);
 });
 
 interface PanEntry { event: string; payload: { x: number; z: number } }

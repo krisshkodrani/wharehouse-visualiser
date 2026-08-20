@@ -8,7 +8,8 @@
           : (${warehouse>/viewMode} === 'STORY' ? 'Waiting for the first transport order' : 'Select an order to inspect its route') }" />
         <Text text="Drag to orbit · WASD to pan · scroll to zoom" class="viewportHint" />
       </VBox>
-      <core:Fragment fragmentName="warehouse.visualizer.view.fragments.KpiOverlay" type="XML" />
+      <Button text="Order details" icon="sap-icon://detail-view" type="Emphasized" press=".onOpenOrderDetails"
+        visible="{= ${warehouse>/viewMode} === 'OPERATIONS' &amp;&amp; ${warehouse>/compactLayout} &amp;&amp; !!${warehouse>/selectedOrder/id} }" class="mobileDetailTrigger" />
     </HBox>
     <warehouse:WarehouseViewport id="viewport" rackSelected=".onRackSelected" class="warehouseViewport" />
   </VBox>

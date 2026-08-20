@@ -17,10 +17,8 @@
           </HBox>
           <ObjectStatus text="{warehouse>status}" state="{warehouse>statusState}" inverted="true" />
         </HBox>
-        <HBox justifyContent="SpaceBetween" alignItems="Center" class="taskMeta">
+        <HBox alignItems="Center" class="taskMeta">
           <HBox alignItems="Center" class="taskVehicle"><core:Icon src="sap-icon://shipping-status" /><Text text="{warehouse>vehicleLabel}" /></HBox>
-          <Button text="{= ${warehouse>updateCount} + ' VDA update' + (${warehouse>updateCount} === 1 ? '' : 's') }" icon="sap-icon://source-code"
-            type="Transparent" press=".onInspectTaskVda" enabled="{= ${warehouse>updateCount} > 0 }" />
         </HBox>
         <VBox visible="{warehouse>selected}" class="taskExpanded">
           <Label text="Planned route" /><Text text="{warehouse>routeText}" wrapping="true" />
