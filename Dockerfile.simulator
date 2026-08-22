@@ -8,7 +8,7 @@ COPY vda5050-contracts/src vda5050-contracts/src
 COPY simulator/src simulator/src
 RUN mvn -B -pl simulator -am package -DskipTests
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:24-jre
 WORKDIR /app
 COPY --from=build /workspace/simulator/target/warehouse-simulator-*.jar app.jar
 ENTRYPOINT ["java","-jar","app.jar"]
